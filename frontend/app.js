@@ -167,7 +167,7 @@ const App = {
     ]);
 
     const rsi = signal.rsi || {};
-    el("card-rsi").innerHTML = this.kv([["RSI", fmt(rsi.value)], ["Period", rsi.period]]);
+    el("card-rsi").innerHTML = this.kv([["RSI", fmt(rsi.value)], ["Period", fmt(rsi.period)]]);
 
     const bb = signal.bollinger || {};
     el("card-bollinger").innerHTML = this.kv([
@@ -192,7 +192,7 @@ const App = {
     el("card-sr").innerHTML = levels || "<div class='card-kv'><span>No clear levels</span></div>";
 
     const pa = signal.price_action || {};
-    el("card-price-action").innerHTML = this.kv([["Pattern", pa.pattern], ["Bias", pa.bias]]);
+    el("card-price-action").innerHTML = this.kv([["Pattern", fmt(pa.pattern)], ["Bias", fmt(pa.bias)]]);
   },
 
   kv(pairs) {
