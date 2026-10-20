@@ -1,10 +1,12 @@
-"""Momentum indicators: RSI (Wilder) and MACD."""
+"""Momentum indicators: RSI (Wilder), MACD, Stochastic, Williams %R."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
-from .trend import ema
+from data.models import Candle
+
+from .trend import ema, sma
 
 
 def rsi(closes: Sequence[float], period: int = 14) -> List[Optional[float]]:
@@ -81,3 +83,50 @@ def macd(
                 histogram[i] = macd_line[i] - signal_line[i]
 
     return MACDResult(macd_line=macd_line, signal_line=signal_line, histogram=histogram)
+
+
+@dataclass
+class StochasticResult:
+    percent_k: List[Optional[float]]
+    percent_d: List[Optional[float]]
+
+
+def stochastic(
+    candles: Sequence[Candle], k_period: int = 14, d_period: int = 3
+) -> StochasticResult:
+    """Stochastic oscillator: %K (fast) and %D (SMA of %K)."""
+    n = len(candles)
+    percent_k: List[Optional[float]] = [None] * n
+    for i in range(k_period - 1, n):
+        window = candles[i - k_period + 1 : i + 1]
+        highest = max(c.high for c in window)
+        lowest = min(c.low for c in window)
+        if highest == lowest:
+            percent_k[i] = 50.0  # degenerate flat window; neither OB nor OS
+        else:
+            percent_k[i] = 100.0 * (candles[i].close - lowest) / (highest - lowest)
+
+    first_valid = next((i for i, v in enumerate(percent_k) if v is not None), None)
+    percent_d: List[Optional[float]] = [None] * n
+    if first_valid is not None:
+        tail = [v for v in percent_k[first_valid:]]  # type: ignore[misc]
+        d_tail = sma(tail, d_period)
+        for offset, v in enumerate(d_tail):
+            percent_d[first_valid + offset] = v
+
+    return StochasticResult(percent_k=percent_k, percent_d=percent_d)
+
+
+def williams_r(candles: Sequence[Candle], period: int = 14) -> List[Optional[float]]:
+    """Williams %R, range [-100, 0]. Near 0 = overbought, near -100 = oversold."""
+    n = len(candles)
+    out: List[Optional[float]] = [None] * n
+    for i in range(period - 1, n):
+        window = candles[i - period + 1 : i + 1]
+        highest = max(c.high for c in window)
+        lowest = min(c.low for c in window)
+        if highest == lowest:
+            out[i] = -50.0
+        else:
+            out[i] = -100.0 * (highest - candles[i].close) / (highest - lowest)
+    return out

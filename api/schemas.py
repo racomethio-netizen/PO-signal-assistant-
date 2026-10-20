@@ -57,8 +57,9 @@ class WeightsRequest(BaseModel):
     volatility: float
     price_action: float
     support_resistance: float
-    indicator_confirmation: float
     multi_timeframe: float
+    candle_quality: float
+    market_regime: float
 
 
 class StrategyConfigRequest(BaseModel):

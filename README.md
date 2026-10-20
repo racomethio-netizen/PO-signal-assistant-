@@ -2,9 +2,11 @@
 
 A **technical-analysis and signal assistant** for 2-minute, 3-minute, and 15-minute
 setups. It turns OHLCV candle data you provide into a structured, explainable,
-probabilistic technical read — trend, momentum, volatility, support/resistance,
-and multi-timeframe confirmation — with transparent scoring and a strong
-preference for **NO TRADE** when evidence conflicts.
+probabilistic technical read — trend, momentum, volatility, price action,
+candle-level quality, support/resistance, market regime (ADX-based trend
+strength + possible-reversal detection), and multi-timeframe confirmation —
+with transparent, configurable scoring and a strong preference for
+**NO TRADE** when evidence conflicts.
 
 ## What this is NOT
 
@@ -29,11 +31,11 @@ that could be flipped into one.
 ## Architecture
 
 ```
-data/        OHLCV model, validation (duplicates/gaps/stale/invalid OHLC), CSV/JSON/manual loaders
-indicators/  Pure deterministic indicator math: SMA/EMA, RSI, MACD, Bollinger, ATR, Keltner, Parabolic SAR, price action/support-resistance
+data/        OHLCV model, validation (duplicates/gaps/stale/invalid OHLC/unclosed candle), CSV/JSON/manual loaders, Binance adapter
+indicators/  Pure deterministic indicator math: SMA/EMA(incl. 200)/slope/separation, RSI, MACD, Stochastic, Williams %R, Bollinger, ATR, Keltner, Parabolic SAR, ADX/+DI/-DI, candle-quality analysis, support/resistance
 strategy/    Configurable indicator parameters, per-timeframe (2m/3m/15m) scoring weights and thresholds
-signals/     The signal engine: 7 independent evidence scores -> weighted composite -> Direction/Confidence/Score, NO-TRADE filters, explainable Signal model
-backtest/    No-lookahead historical simulation using the exact same signal engine, metrics, walk-forward evaluation
+signals/     The signal engine: 8 independent evidence scores -> weighted composite -> Direction/Confidence/Score, NO-TRADE filters, data-quality confidence dampening, explainable Signal model
+backtest/    No-lookahead historical simulation using the exact same signal engine, metrics (incl. EV-per-stake and confidence calibration), walk-forward evaluation
 paper/       PAPER (simulated) trading bookkeeping — never places a real trade
 risk/        Risk manager: max stake %, max daily loss %, max consecutive losses, cooldown, ACTIVE/CAUTION/TRADING PAUSED status
 llm/         LLM provider interface; Claude narrates already-computed analysis, never calculates indicators or overrides risk
@@ -46,6 +48,37 @@ tests/       pytest suite with deterministic fixtures (no unseeded randomness)
 Each layer only talks to the layer below it. The LLM layer can never reach
 into `risk/` or `paper/` — it only ever receives an already-finalized
 `Signal` or backtest report to narrate in plain language.
+
+### The eight evidence categories
+
+Every signal's score is a transparent weighted sum of eight independent,
+configurable-weight categories — `trend`, `momentum`, `volatility`,
+`price_action`, `support_resistance`, `candle_quality`, `market_regime`,
+`multi_timeframe`. Each indicator votes in exactly ONE category so
+correlated indicators (e.g. RSI, Stochastic, Williams %R — all momentum
+oscillators) never silently stack their influence: they're averaged
+together within `momentum`, not each given a separate weighted slot.
+`market_regime` is where ADX/+DI/-DI and Parabolic SAR vote (trend
+strength/direction and possible-reversal detection); `candle_quality` is
+where body/wick ratios, pin bars, consecutive-candle momentum, gaps, and
+rejection/false-breakout-at-a-level vote.
+
+A ninth signal — **data quality** (validation warnings, confirmation-
+timeframe availability, support/resistance data sufficiency) — is
+deliberately NOT a tenth weighted directional vote (it isn't inherently
+bullish or bearish). Instead it's reported as `data_quality_score`
+(0-100) on every signal and dampens **confidence**, not the technical
+score itself: identical indicator evidence on thinner data earns a lower
+confidence label, never a different score.
+
+### Candle-closed confirmation
+
+By default (`require_candle_closed=True`), the engine refuses to score a
+candle whose time window hasn't fully elapsed yet — scoring a still-
+forming candle would use a close price that can still change. This has
+no effect on historical/backtest data (every candle there is already
+closed by definition) and only ever triggers for genuinely live/in-
+progress data, where it correctly returns `DATA UNAVAILABLE — NO SIGNAL`.
 
 ### Known limitations (by design, for this version)
 
@@ -254,17 +287,20 @@ pip install -r requirements-dev.txt
 pytest tests/ -q
 ```
 
-100 tests cover indicator math, data validation (duplicates/gaps/stale/invalid
-OHLC/insufficient history), the signal engine (including NO-TRADE
-conditions and that future candles never change a past decision), risk
-limits (including that stake never increases after a loss), paper trading,
-backtesting (including a direct no-lookahead equivalence check against the
-live engine), the LLM provider's failure/malformed-response handling, the
-Binance adapter (symbol normalization, resampling, pagination, unclosed-
-candle filtering, and upstream-failure handling — all with HTTP mocked, so
-the suite never depends on live network access), and the API layer
-(including that paper trades require explicit confirmation and that
-risk/config validation rejects bad input).
+128 tests cover indicator math (including ADX/+DI/-DI, Stochastic, Williams
+%R, candle-quality metrics), data validation (duplicates/gaps/stale/invalid
+OHLC/insufficient history/unclosed last candle), the signal engine
+(including NO-TRADE conditions, that future candles never change a past
+decision, the new market-regime classification, and the data-quality
+confidence dampener), risk limits (including that stake never increases
+after a loss), paper trading, backtesting (including a direct no-lookahead
+equivalence check against the live engine, the EV-per-stake formula, and
+confidence calibration), the LLM provider's failure/malformed-response
+handling, the Binance adapter (symbol normalization, resampling,
+pagination, unclosed-candle filtering, and upstream-failure handling — all
+with HTTP mocked, so the suite never depends on live network access), and
+the API layer (including that paper trades require explicit confirmation
+and that risk/config validation rejects bad input).
 
 ## Limitations & risk warnings
 

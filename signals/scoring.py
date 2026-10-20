@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+from indicators import trend as trend_mod
 from indicators.price_action import nearest_level
 from strategy.config import IndicatorConfig, ScoreWeights
 from .models import ComponentScore
@@ -19,9 +20,9 @@ def _clip(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, value))
 
 
-def score_trend(snap: IndicatorSnapshot) -> ComponentScore:
+def score_trend(snap: IndicatorSnapshot, cfg: Optional[IndicatorConfig] = None) -> ComponentScore:
     price = snap.last_close
-    votes: List[int] = []
+    votes: List[float] = []
     notes: List[str] = []
 
     ema_values = {p: snap.latest(snap.ema[p]) for p in snap.ema}
@@ -49,6 +50,15 @@ def score_trend(snap: IndicatorSnapshot) -> ComponentScore:
                 votes.append(-1)
                 notes.append("EMAs stacked bearish (fast<slow)")
 
+    # Trend acceleration/deceleration: is the fastest EMA still gaining pace?
+    fast_period = min(snap.ema.keys()) if snap.ema else None
+    if fast_period is not None:
+        lookback = cfg.ma_slope_lookback if cfg else 5
+        ma_slope = trend_mod.slope(snap.ema[fast_period], lookback)
+        if ma_slope is not None and abs(ma_slope) > 1e-6:
+            votes.append(_clip(ma_slope * 50))
+            notes.append(f"EMA{fast_period} slope {'rising' if ma_slope > 0 else 'falling'} ({ma_slope*100:.3f}%/bar)")
+
     if not votes:
         return ComponentScore("trend", 0.0, 0.0, 0.0, "Insufficient moving-average data.")
 
@@ -58,6 +68,12 @@ def score_trend(snap: IndicatorSnapshot) -> ComponentScore:
 
 
 def score_momentum(snap: IndicatorSnapshot, cfg: IndicatorConfig) -> ComponentScore:
+    """Momentum evidence from RSI, MACD histogram, Stochastic, and Williams
+    %R together. These four are deliberately averaged into ONE category
+    (not four separately-weighted ones) since they all measure the same
+    underlying thing — momentum/overbought-oversold — just via different
+    math; weighting them separately would let momentum dominate the
+    composite purely by indicator count."""
     rsi_val = snap.latest(snap.rsi_series)
     hist = snap.macd_result.histogram
     hist_val = snap.latest(hist)
@@ -95,8 +111,32 @@ def score_momentum(snap: IndicatorSnapshot, cfg: IndicatorConfig) -> ComponentSc
         else:
             notes.append("MACD histogram flat at zero")
 
+    stoch_k = snap.latest(snap.stochastic_result.percent_k) if snap.stochastic_result else None
+    if stoch_k is not None:
+        if stoch_k >= cfg.stoch_overbought:
+            parts.append(0.2)
+            notes.append(f"Stochastic %K {stoch_k:.1f} overbought (overextended, caution)")
+        elif stoch_k <= cfg.stoch_oversold:
+            parts.append(-0.2)
+            notes.append(f"Stochastic %K {stoch_k:.1f} oversold (overextended, caution)")
+        else:
+            parts.append(_clip((stoch_k - 50) / 30))
+            notes.append(f"Stochastic %K {stoch_k:.1f}")
+
+    wr = snap.latest(snap.williams_r_series) if snap.williams_r_series else None
+    if wr is not None:
+        if wr >= cfg.williams_overbought:
+            parts.append(0.2)
+            notes.append(f"Williams %R {wr:.1f} overbought (overextended, caution)")
+        elif wr <= cfg.williams_oversold:
+            parts.append(-0.2)
+            notes.append(f"Williams %R {wr:.1f} oversold (overextended, caution)")
+        else:
+            parts.append(_clip((wr + 50) / 30))
+            notes.append(f"Williams %R {wr:.1f}")
+
     if not parts:
-        return ComponentScore("momentum", 0.0, 0.0, 0.0, "Insufficient data for RSI/MACD.")
+        return ComponentScore("momentum", 0.0, 0.0, 0.0, "Insufficient data for RSI/MACD/Stochastic/Williams %R.")
 
     score = _clip(sum(parts) / len(parts))
     return ComponentScore("momentum", score, 0.0, 0.0, "; ".join(notes))
@@ -183,38 +223,88 @@ def score_support_resistance(snap: IndicatorSnapshot) -> ComponentScore:
     return ComponentScore("support_resistance", score, 0.0, 0.0, "; ".join(notes))
 
 
-def score_indicator_confirmation(snap: IndicatorSnapshot, cfg: IndicatorConfig) -> ComponentScore:
-    votes: List[float] = []
+def score_market_regime(snap: IndicatorSnapshot, cfg: IndicatorConfig) -> ComponentScore:
+    """Evidence from the market's REGIME, not raw price level: how strong is
+    the prevailing trend (ADX), which way is it pointed (+DI/-DI), and has
+    Parabolic SAR just flipped (a possible-reversal warning that dampens,
+    rather than reinforces, continuation evidence)? Deliberately the only
+    place ADX and SAR vote, so they don't also get counted inside `trend`
+    or `momentum`."""
+    adx_val = snap.latest(snap.adx_result.adx) if snap.adx_result else None
+    plus_di = snap.latest(snap.adx_result.plus_di) if snap.adx_result else None
+    minus_di = snap.latest(snap.adx_result.minus_di) if snap.adx_result else None
+    sar_trend_series = snap.sar_result.trend if snap.sar_result else []
+    sar_trend = sar_trend_series[-1] if sar_trend_series else None
+
     notes: List[str] = []
 
-    rsi_val = snap.latest(snap.rsi_series)
-    if rsi_val is not None:
-        votes.append(1.0 if rsi_val > 50 else (-1.0 if rsi_val < 50 else 0.0))
-        notes.append(f"RSI {'bullish' if rsi_val > 50 else 'bearish' if rsi_val < 50 else 'neutral'}")
+    if adx_val is None or plus_di is None or minus_di is None:
+        return ComponentScore("market_regime", 0.0, 0.0, 0.0, "Insufficient data for ADX/+DI/-DI.")
 
-    hist_val = snap.latest(snap.macd_result.histogram)
-    if hist_val is not None:
-        votes.append(1.0 if hist_val > 0 else (-1.0 if hist_val < 0 else 0.0))
-        notes.append(f"MACD {'bullish' if hist_val > 0 else 'bearish' if hist_val < 0 else 'flat'}")
+    direction = 1.0 if plus_di > minus_di else (-1.0 if minus_di > plus_di else 0.0)
 
-    price = snap.last_close
-    upper = snap.latest(snap.bb_result.upper)
-    lower = snap.latest(snap.bb_result.lower)
-    if upper is not None and lower is not None and upper != lower:
-        pct_b = (price - lower) / (upper - lower)
-        votes.append(1.0 if pct_b > 0.5 else -1.0)
-        notes.append(f"Bollinger {'bullish' if pct_b > 0.5 else 'bearish'} half")
+    if adx_val >= cfg.adx_strong_trend:
+        strength_factor = 1.0
+        notes.append(f"ADX {adx_val:.1f} — strong trend")
+    elif adx_val >= cfg.adx_weak_trend:
+        strength_factor = 0.5
+        notes.append(f"ADX {adx_val:.1f} — weak/developing trend")
+    else:
+        strength_factor = 0.15
+        notes.append(f"ADX {adx_val:.1f} — ranging/no trend")
 
-    sar_trend = snap.sar_result.trend[-1] if snap.sar_result.trend else None
-    if sar_trend is not None:
-        votes.append(1.0 if sar_trend == "up" else -1.0)
-        notes.append(f"Parabolic SAR {'bullish' if sar_trend == 'up' else 'bearish'}")
+    notes.append(f"+DI {plus_di:.1f} {'>' if plus_di > minus_di else '<'} -DI {minus_di:.1f}")
 
-    if not votes:
-        return ComponentScore("indicator_confirmation", 0.0, 0.0, 0.0, "Insufficient indicator data.")
+    score = direction * strength_factor
 
-    score = _clip(sum(votes) / len(votes))
-    return ComponentScore("indicator_confirmation", score, 0.0, 0.0, "; ".join(notes))
+    # Possible reversal: SAR flipped within the last 2 candles while the
+    # ADX-implied direction still reflects the OLD trend — a caution flag
+    # that dampens (not reverses) the regime vote rather than overriding it.
+    recent_sar = [t for t in sar_trend_series[-3:] if t is not None]
+    sar_just_flipped = len(recent_sar) >= 2 and recent_sar[-1] != recent_sar[-2]
+    if sar_just_flipped:
+        score *= 0.4
+        notes.append(f"Parabolic SAR just flipped {sar_trend} — possible reversal, regime evidence dampened")
+    elif sar_trend is not None:
+        sar_agrees = (sar_trend == "up" and direction > 0) or (sar_trend == "down" and direction < 0)
+        if not sar_agrees and direction != 0:
+            score *= 0.6
+            notes.append(f"Parabolic SAR ({sar_trend}) disagrees with +DI/-DI direction — dampened")
+        else:
+            notes.append(f"Parabolic SAR ({sar_trend}) agrees with regime direction")
+
+    return ComponentScore("market_regime", _clip(score), 0.0, 0.0, "; ".join(notes))
+
+
+def score_candle_quality(snap: IndicatorSnapshot) -> ComponentScore:
+    """Evidence from THIS candle's micro-structure: body/wick ratios, pin
+    bars, consecutive-candle momentum, and rejection/false-breakout at a
+    nearby level. Distinct from `price_action` (named pattern + 3-candle
+    direction) — this is about how convincingly the most recent candle was
+    built, not what pattern it resembles."""
+    cq = snap.candle_quality
+    if cq is None:
+        return ComponentScore("candle_quality", 0.0, 0.0, 0.0, "Insufficient data for candle-quality analysis.")
+
+    notes: List[str] = [f"body ratio {cq.body_ratio:.2f}, close position {cq.close_position:.2f}"]
+    if cq.is_pin_bar:
+        notes.append("pin bar")
+    if cq.is_outside_bar:
+        notes.append("outside bar")
+    if cq.consecutive_bullish >= 3:
+        notes.append(f"{cq.consecutive_bullish} consecutive bullish candles")
+    if cq.consecutive_bearish >= 3:
+        notes.append(f"{cq.consecutive_bearish} consecutive bearish candles")
+    if cq.volatility_state != "UNKNOWN":
+        notes.append(f"range {cq.volatility_state.lower()} vs recent average")
+    if cq.gap:
+        notes.append(f"{cq.gap} ({(cq.gap_size_pct or 0)*100:.2f}%)")
+    if cq.rejection_at:
+        notes.append(f"rejection at {cq.rejection_at}")
+    if cq.false_breakout:
+        notes.append(f"false breakout at {cq.false_breakout}")
+
+    return ComponentScore("candle_quality", _clip(cq.quality_score), 0.0, 0.0, "; ".join(notes))
 
 
 def score_multi_timeframe(

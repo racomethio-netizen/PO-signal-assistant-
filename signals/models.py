@@ -39,11 +39,19 @@ class Confidence(str, Enum):
 
 
 class MarketRegime(str, Enum):
+    # Coarse states (kept for backward compatibility — used when ADX data
+    # isn't available to make the finer strong/weak distinction below).
     TRENDING_BULLISH = "TRENDING_BULLISH"
     TRENDING_BEARISH = "TRENDING_BEARISH"
     RANGING = "RANGING"
     VOLATILE_CHOPPY = "VOLATILE_CHOPPY"
     UNKNOWN = "UNKNOWN"
+    # Finer-grained states, used once ADX/+DI/-DI and SAR are available.
+    STRONG_TRENDING_BULLISH = "STRONG_TRENDING_BULLISH"
+    WEAK_TRENDING_BULLISH = "WEAK_TRENDING_BULLISH"
+    STRONG_TRENDING_BEARISH = "STRONG_TRENDING_BEARISH"
+    WEAK_TRENDING_BEARISH = "WEAK_TRENDING_BEARISH"
+    POSSIBLE_REVERSAL = "POSSIBLE_REVERSAL"
 
 
 RISK_WARNING = (
@@ -113,6 +121,16 @@ class Signal:
     invalidation_condition: str
     suggested_expiry_window: str
 
+    # Added for advanced analysis: ADX/+DI/-DI, Stochastic, Williams %R,
+    # and candle-micro-structure cards, plus a non-directional data-quality
+    # score (0-100) that dampens CONFIDENCE (not the technical score
+    # itself) when the underlying data is thinner/staler/less confirmed.
+    adx: Dict[str, Any] = field(default_factory=dict)
+    stochastic: Dict[str, Any] = field(default_factory=dict)
+    williams_r: Dict[str, Any] = field(default_factory=dict)
+    candle_quality: Dict[str, Any] = field(default_factory=dict)
+    data_quality_score: float = 100.0
+
     data_quality_notes: List[str] = field(default_factory=list)
     explanation: Optional[str] = None  # LLM-generated narrative, if available
     risk_warning: str = RISK_WARNING
@@ -138,6 +156,11 @@ class Signal:
             "moving_averages": self.moving_averages,
             "price_action": self.price_action,
             "multi_timeframe": self.multi_timeframe,
+            "adx": self.adx,
+            "stochastic": self.stochastic,
+            "williams_r": self.williams_r,
+            "candle_quality": self.candle_quality,
+            "data_quality_score": round(self.data_quality_score, 1),
             "reasons_supporting": self.reasons_supporting,
             "reasons_against": self.reasons_against,
             "invalidation_condition": self.invalidation_condition,

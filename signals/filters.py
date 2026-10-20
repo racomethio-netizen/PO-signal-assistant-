@@ -18,6 +18,8 @@ ABNORMAL_BANDWIDTH_RATIO = 3.0         # current bandwidth vs its own recent ave
 SIDEWAYS_SCORE_THRESHOLD = 0.12        # |score| below this counts as "no clear structure"
 SIDEWAYS_BANDWIDTH_RATIO = 0.35        # squeeze relative to recent average, for the sideways filter
 STRONG_CONFLICT_THRESHOLD = 0.4
+GAP_ATR_MULTIPLE = 3.0                 # a gap this many ATRs wide = sudden discontinuity, not noise
+MTF_CONTRADICTION_THRESHOLD = 0.5      # how strongly MTF must disagree with the primary read to block
 
 AMBIGUOUS_PATTERNS = {"DOJI", "INSIDE_BAR", "FLAT"}
 
@@ -79,6 +81,31 @@ def check_no_trade_filters(
             reasons.append(
                 "Market is moving sideways in a tight range with no clear directional "
                 "structure."
+            )
+
+    # 6. Sudden price discontinuity (gap) far larger than normal candle-to-
+    # candle movement — a sign of a bad tick, a session gap, or an illiquid
+    # feed, not a tradeable setup.
+    cq = snap.candle_quality
+    atr_val = snap.latest(snap.atr_series)
+    if cq is not None and cq.gap is not None and cq.gap_size_pct is not None and atr_val and snap.last_close:
+        gap_in_atr = abs(cq.gap_size_pct * snap.last_close) / atr_val
+        if gap_in_atr >= GAP_ATR_MULTIPLE:
+            reasons.append(
+                f"Sudden price discontinuity: {cq.gap} of {gap_in_atr:.1f}x ATR — "
+                "likely a bad tick, session gap, or illiquid feed."
+            )
+
+    # 7. Higher-timeframe evidence strongly contradicts this timeframe's
+    # own trend/momentum read. A quiet/neutral higher timeframe is fine
+    # (score near 0); an actively OPPOSING one is a real red flag.
+    mtf = raw_scores.get("multi_timeframe")
+    if trend and momentum and mtf is not None and abs(mtf.score) >= MTF_CONTRADICTION_THRESHOLD:
+        primary_lean = trend.score + momentum.score
+        if abs(primary_lean) >= STRONG_CONFLICT_THRESHOLD and (primary_lean > 0) != (mtf.score > 0):
+            reasons.append(
+                f"Higher-timeframe evidence ({mtf.score:+.2f}) strongly contradicts this "
+                f"timeframe's trend/momentum read ({primary_lean:+.2f})."
             )
 
     return NoTradeFilterResult(triggered=len(reasons) > 0, reasons=reasons)

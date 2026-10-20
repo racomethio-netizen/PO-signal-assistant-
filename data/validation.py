@@ -7,7 +7,7 @@ produce a signal.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Sequence
 
 from .models import Candle, IssueSeverity, ValidationIssue, ValidationResult
@@ -18,12 +18,32 @@ MIN_CANDLES_DEFAULT = 50
 GAP_TOLERANCE_FRACTION = 1.5
 
 
+def is_last_candle_closed(
+    candles: Sequence[Candle], timeframe_seconds: int, now: datetime | None = None
+) -> bool:
+    """True if the most recent candle's time window has fully elapsed.
+
+    Scoring an in-progress candle as if it were final would use a close
+    price that can still change — this is the guard against that. Not
+    meaningful for historical/backtest data (there, every candle in the
+    series is by definition already closed), so callers opt in via
+    ``validate_candles(..., require_last_candle_closed=True)`` only for
+    live/current-moment signal generation.
+    """
+    if not candles:
+        return False
+    now = now or datetime.now(timezone.utc)
+    close_time = candles[-1].timestamp + timedelta(seconds=timeframe_seconds)
+    return now >= close_time
+
+
 def validate_candles(
     candles: Sequence[Candle],
     timeframe_seconds: int,
     *,
     min_candles: int = MIN_CANDLES_DEFAULT,
     max_stale_seconds: int | None = None,
+    require_last_candle_closed: bool = False,
     now: datetime | None = None,
 ) -> ValidationResult:
     """Validate a sequence of candles for a given timeframe.
@@ -131,6 +151,18 @@ def validate_candles(
                     )
                 )
         prev = c
+
+    # Candle-closed confirmation (opt-in; meaningless for historical data).
+    if require_last_candle_closed and not is_last_candle_closed(candles, timeframe_seconds, now):
+        issues.append(
+            ValidationIssue(
+                "LAST_CANDLE_NOT_CLOSED",
+                IssueSeverity.ERROR,
+                "The most recent candle's time window has not fully elapsed yet; "
+                "scoring an in-progress candle would use a close price that can "
+                "still change.",
+            )
+        )
 
     # Staleness.
     if max_stale_seconds is not None:

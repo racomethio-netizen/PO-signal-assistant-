@@ -25,7 +25,10 @@ class IndicatorConfig:
     rsi_oversold: float = 30.0
 
     sma_periods: Tuple[int, ...] = (20, 50, 200)
-    ema_periods: Tuple[int, ...] = (9, 21, 50)
+    # EMA 200 only populates once >=200 candles are available; it's a
+    # harmless no-op (None) otherwise and never blocks a 2m/3m/15m signal.
+    ema_periods: Tuple[int, ...] = (9, 21, 50, 200)
+    ma_slope_lookback: int = 5
 
     sar_step: float = 0.02
     sar_max_step: float = 0.2
@@ -35,8 +38,24 @@ class IndicatorConfig:
     keltner_atr_period: int = 10
     keltner_atr_multiplier: float = 2.0
 
+    adx_period: int = 14
+    adx_strong_trend: float = 25.0  # ADX at/above this = a strong trend
+    adx_weak_trend: float = 18.0    # ADX below this = effectively no trend
+
+    stoch_k_period: int = 14
+    stoch_d_period: int = 3
+    stoch_overbought: float = 80.0
+    stoch_oversold: float = 20.0
+
+    williams_period: int = 14
+    williams_overbought: float = -20.0
+    williams_oversold: float = -80.0
+
     sr_lookback: int = 3
     sr_cluster_tolerance_pct: float = 0.0015
+
+    candle_quality_range_lookback: int = 10
+    candle_quality_level_proximity_pct: float = 0.0015
 
 
 DEFAULT_INDICATOR_CONFIG = IndicatorConfig()
@@ -44,16 +63,24 @@ DEFAULT_INDICATOR_CONFIG = IndicatorConfig()
 
 @dataclass(frozen=True)
 class ScoreWeights:
-    """Weights for the seven independent evidence scores. Must sum to 1.0
-    (validated in ``__post_init__``)."""
+    """Weights for the eight independent evidence scores. Must sum to 1.0
+    (validated in ``__post_init__``).
+
+    Note: RSI/MACD/Bollinger/SAR votes are NOT a separate weighted
+    category here — they're already distributed across ``momentum``
+    (RSI, MACD, Stochastic, Williams %R), ``volatility`` (Bollinger,
+    Keltner), and ``market_regime`` (ADX, SAR trend state), so one
+    indicator doesn't get counted twice under two different scores.
+    """
 
     trend: float
     momentum: float
     volatility: float
     price_action: float
     support_resistance: float
-    indicator_confirmation: float
     multi_timeframe: float
+    candle_quality: float
+    market_regime: float
 
     def __post_init__(self) -> None:
         total = (
@@ -62,8 +89,9 @@ class ScoreWeights:
             + self.volatility
             + self.price_action
             + self.support_resistance
-            + self.indicator_confirmation
             + self.multi_timeframe
+            + self.candle_quality
+            + self.market_regime
         )
         if abs(total - 1.0) > 1e-6:
             raise ValueError(f"ScoreWeights must sum to 1.0, got {total}")
@@ -75,8 +103,9 @@ class ScoreWeights:
             "volatility": self.volatility,
             "price_action": self.price_action,
             "support_resistance": self.support_resistance,
-            "indicator_confirmation": self.indicator_confirmation,
             "multi_timeframe": self.multi_timeframe,
+            "candle_quality": self.candle_quality,
+            "market_regime": self.market_regime,
         }
 
 
@@ -96,28 +125,30 @@ class TimeframeConfig:
 
 
 # --- 2-minute mode ---------------------------------------------------------
-# Prioritizes immediate momentum, candle structure, RSI, MACD histogram,
-# Bollinger position, SAR, and short-term EMA trend.
+# Prioritizes immediate momentum and candle structure/quality above
+# broader trend/regime context, matching the 2m profile's focus on
+# fast-moving, short-lived setups.
 TIMEFRAME_2M = TimeframeConfig(
     name="2m",
     seconds=120,
     min_candles=60,
     confirmation_timeframes_seconds=(180, 300),  # 3m, 5m
     weights=ScoreWeights(
-        trend=0.12,
-        momentum=0.22,
+        trend=0.10,
+        momentum=0.20,
         volatility=0.10,
-        price_action=0.20,
+        price_action=0.14,
         support_resistance=0.08,
-        indicator_confirmation=0.20,
         multi_timeframe=0.08,
+        candle_quality=0.22,
+        market_regime=0.08,
     ),
     expiry_bars=1,
 )
 
 # --- 3-minute mode -----------------------------------------------------
-# Prioritizes momentum, short-term trend, MACD, RSI, Bollinger,
-# support/resistance, and candle confirmation.
+# Balances momentum/trend with candle confirmation and support/resistance,
+# plus moderate weight on higher-timeframe confirmation.
 TIMEFRAME_3M = TimeframeConfig(
     name="3m",
     seconds=180,
@@ -125,19 +156,20 @@ TIMEFRAME_3M = TimeframeConfig(
     confirmation_timeframes_seconds=(300, 900),  # 5m, 15m
     weights=ScoreWeights(
         trend=0.15,
-        momentum=0.20,
+        momentum=0.19,
         volatility=0.10,
-        price_action=0.15,
+        price_action=0.13,
         support_resistance=0.12,
-        indicator_confirmation=0.18,
         multi_timeframe=0.10,
+        candle_quality=0.13,
+        market_regime=0.08,
     ),
     expiry_bars=1,
 )
 
 # --- 15-minute mode ------------------------------------------------------
-# Prioritizes broader trend (SMA/EMA structure), MACD, RSI, major S/R,
-# volatility, and higher-timeframe confirmation where available.
+# Prioritizes broader trend structure, major support/resistance, and the
+# market-regime read (trend strength via ADX) over single-candle quality.
 TIMEFRAME_15M = TimeframeConfig(
     name="15m",
     seconds=900,
@@ -145,12 +177,13 @@ TIMEFRAME_15M = TimeframeConfig(
     confirmation_timeframes_seconds=(1800, 3600),  # 30m, 1h
     weights=ScoreWeights(
         trend=0.20,
-        momentum=0.14,
-        volatility=0.12,
-        price_action=0.08,
+        momentum=0.12,
+        volatility=0.11,
+        price_action=0.06,
         support_resistance=0.16,
-        indicator_confirmation=0.16,
         multi_timeframe=0.14,
+        candle_quality=0.06,
+        market_regime=0.15,
     ),
     expiry_bars=1,
 )

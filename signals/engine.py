@@ -46,6 +46,7 @@ class SignalEngine:
         confirmation_candles_by_label: Optional[Dict[str, Sequence[Candle]]] = None,
         max_stale_seconds: Optional[int] = None,
         explain_with_llm: bool = False,
+        require_candle_closed: bool = True,
     ) -> Signal:
         now = datetime.now(timezone.utc)
         confirmation_candles_by_label = confirmation_candles_by_label or {}
@@ -55,10 +56,12 @@ class SignalEngine:
             timeframe_config.seconds,
             min_candles=timeframe_config.min_candles,
             max_stale_seconds=max_stale_seconds,
+            require_last_candle_closed=require_candle_closed,
+            now=now,
         )
         if not validation.ok:
             error_codes = {e.code for e in validation.errors}
-            if "NO_DATA" in error_codes or "STALE_DATA" in error_codes:
+            if "NO_DATA" in error_codes or "STALE_DATA" in error_codes or "LAST_CANDLE_NOT_CLOSED" in error_codes:
                 reason = "DATA UNAVAILABLE — NO SIGNAL"
             elif "INSUFFICIENT_CANDLES" in error_codes:
                 reason = "INSUFFICIENT DATA — NO SIGNAL"
@@ -81,12 +84,13 @@ class SignalEngine:
             )
 
         raw_scores_list = [
-            scoring.score_trend(snap),
+            scoring.score_trend(snap, self.indicator_config),
             scoring.score_momentum(snap, self.indicator_config),
             scoring.score_volatility(snap),
             scoring.score_price_action(snap),
             scoring.score_support_resistance(snap),
-            scoring.score_indicator_confirmation(snap, self.indicator_config),
+            scoring.score_candle_quality(snap),
+            scoring.score_market_regime(snap, self.indicator_config),
             scoring.score_multi_timeframe(confirmation_snap, confirmation_label),
         ]
         raw_scores = {s.name: s for s in raw_scores_list}
@@ -97,8 +101,10 @@ class SignalEngine:
         composite = scoring.composite_score(weighted_scores)
         score_100 = abs(composite) * 100.0
 
+        data_quality_score = self._data_quality_score(validation, confirmation_snap, snap)
+
         direction, confidence = self._classify(
-            composite, score_100, raw_scores_list, filter_result.triggered
+            composite, score_100, raw_scores_list, filter_result.triggered, data_quality_score,
         )
 
         market_regime = self._market_regime(snap, raw_scores)
@@ -130,6 +136,11 @@ class SignalEngine:
             moving_averages=self._ma_card(snap),
             price_action=self._price_action_card(snap),
             multi_timeframe=self._mtf_card(confirmation_snap, confirmation_label, raw_scores["multi_timeframe"]),
+            adx=self._adx_card(snap, raw_scores["market_regime"]),
+            stochastic=self._stochastic_card(snap),
+            williams_r=self._williams_card(snap),
+            candle_quality=self._candle_quality_card(snap, raw_scores["candle_quality"]),
+            data_quality_score=data_quality_score,
             reasons_supporting=reasons_supporting,
             reasons_against=reasons_against,
             invalidation_condition=invalidation,
@@ -170,6 +181,7 @@ class SignalEngine:
         score_100: float,
         raw_scores: List[ComponentScore],
         filters_triggered: bool,
+        data_quality_score: float = 100.0,
     ) -> tuple[Direction, Confidence]:
         if filters_triggered or score_100 < self.min_score_threshold:
             return Direction.NO_TRADE, Confidence.VERY_LOW if filters_triggered else Confidence.LOW
@@ -189,7 +201,12 @@ class SignalEngine:
         else:
             agreement_ratio = 0.5
 
-        adjusted = score_100 * (0.5 + 0.5 * agreement_ratio)
+        # Data quality never changes the technical SCORE (that's purely
+        # indicator-derived), but it dampens how much CONFIDENCE we place
+        # in it — thinner/staler/less-confirmed data earns a lower label
+        # even for an identical score.
+        quality_factor = 0.6 + 0.4 * (data_quality_score / 100.0)
+        adjusted = score_100 * (0.5 + 0.5 * agreement_ratio) * quality_factor
         if adjusted < 20:
             confidence = Confidence.VERY_LOW
         elif adjusted < 40:
@@ -203,6 +220,22 @@ class SignalEngine:
 
         return direction, confidence
 
+    def _data_quality_score(self, validation, confirmation_snap, snap: IndicatorSnapshot) -> float:
+        """Non-directional 0-100 measure of how much to trust this signal's
+        underlying data: fewer gaps/warnings, available MTF confirmation,
+        and enough history for a confident support/resistance read all
+        raise it; their absence lowers it. Never affects the technical
+        score itself — see ``_classify``."""
+        score = 100.0
+        score -= min(30.0, len(validation.warnings) * 10.0)
+        if confirmation_snap is None:
+            score -= 15.0
+        if not snap.sr_levels:
+            score -= 10.0
+        if snap.candle_quality is not None and snap.candle_quality.volatility_state == "UNKNOWN":
+            score -= 10.0
+        return max(0.0, min(100.0, score))
+
     def _market_regime(self, snap: IndicatorSnapshot, raw_scores: Dict[str, ComponentScore]) -> MarketRegime:
         trend_score = raw_scores["trend"].score
         momentum_score = raw_scores["momentum"].score
@@ -210,6 +243,29 @@ class SignalEngine:
 
         if avg_bw is not None and ratio >= 3.0:
             return MarketRegime.VOLATILE_CHOPPY
+
+        adx_val = snap.latest(snap.adx_result.adx) if snap.adx_result else None
+        sar_trend_series = snap.sar_result.trend if snap.sar_result else []
+        recent_sar = [t for t in sar_trend_series[-3:] if t is not None]
+        sar_just_flipped = len(recent_sar) >= 2 and recent_sar[-1] != recent_sar[-2]
+
+        if adx_val is not None:
+            if sar_just_flipped and adx_val >= snap.config.adx_weak_trend:
+                return MarketRegime.POSSIBLE_REVERSAL
+            if adx_val >= snap.config.adx_strong_trend:
+                return (
+                    MarketRegime.STRONG_TRENDING_BULLISH if trend_score > 0
+                    else MarketRegime.STRONG_TRENDING_BEARISH
+                )
+            if adx_val >= snap.config.adx_weak_trend:
+                return (
+                    MarketRegime.WEAK_TRENDING_BULLISH if trend_score > 0
+                    else MarketRegime.WEAK_TRENDING_BEARISH
+                )
+            return MarketRegime.RANGING
+
+        # ADX unavailable (not enough history yet) — fall back to the
+        # coarser, trend-score-only classification.
         if abs(trend_score) >= 0.4:
             return MarketRegime.TRENDING_BULLISH if trend_score > 0 else MarketRegime.TRENDING_BEARISH
         if abs(trend_score) < 0.25 and abs(momentum_score) < 0.25:
@@ -356,4 +412,46 @@ class SignalEngine:
             "available": confirmation_snap is not None,
             "score": round(score.score, 3),
             "detail": score.detail,
+        }
+
+    def _adx_card(self, snap: IndicatorSnapshot, score: ComponentScore) -> Dict:
+        return {
+            "score": round(score.score, 3),
+            "detail": score.detail,
+            "adx": snap.latest(snap.adx_result.adx) if snap.adx_result else None,
+            "plus_di": snap.latest(snap.adx_result.plus_di) if snap.adx_result else None,
+            "minus_di": snap.latest(snap.adx_result.minus_di) if snap.adx_result else None,
+        }
+
+    def _stochastic_card(self, snap: IndicatorSnapshot) -> Dict:
+        if not snap.stochastic_result:
+            return {"percent_k": None, "percent_d": None}
+        return {
+            "percent_k": snap.latest(snap.stochastic_result.percent_k),
+            "percent_d": snap.latest(snap.stochastic_result.percent_d),
+        }
+
+    def _williams_card(self, snap: IndicatorSnapshot) -> Dict:
+        return {"value": snap.latest(snap.williams_r_series) if snap.williams_r_series else None}
+
+    def _candle_quality_card(self, snap: IndicatorSnapshot, score: ComponentScore) -> Dict:
+        cq = snap.candle_quality
+        if cq is None:
+            return {"score": round(score.score, 3), "detail": score.detail}
+        return {
+            "score": round(score.score, 3),
+            "detail": score.detail,
+            "body_ratio": round(cq.body_ratio, 3),
+            "upper_wick_ratio": round(cq.upper_wick_ratio, 3),
+            "lower_wick_ratio": round(cq.lower_wick_ratio, 3),
+            "close_position": round(cq.close_position, 3),
+            "is_pin_bar": cq.is_pin_bar,
+            "is_outside_bar": cq.is_outside_bar,
+            "is_inside_bar": cq.is_inside_bar,
+            "consecutive_bullish": cq.consecutive_bullish,
+            "consecutive_bearish": cq.consecutive_bearish,
+            "volatility_state": cq.volatility_state,
+            "gap": cq.gap,
+            "rejection_at": cq.rejection_at,
+            "false_breakout": cq.false_breakout,
         }

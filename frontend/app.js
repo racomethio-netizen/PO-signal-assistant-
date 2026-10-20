@@ -193,6 +193,33 @@ const App = {
 
     const pa = signal.price_action || {};
     el("card-price-action").innerHTML = this.kv([["Pattern", fmt(pa.pattern)], ["Bias", fmt(pa.bias)]]);
+
+    const adx = signal.adx || {};
+    el("card-adx").innerHTML = this.kv([
+      ["ADX", fmt(adx.adx)], ["+DI", fmt(adx.plus_di)], ["-DI", fmt(adx.minus_di)],
+      ["Regime", signal.market_regime || "n/a"],
+    ]);
+
+    const stoch = signal.stochastic || {};
+    el("card-stochastic").innerHTML = this.kv([["%K", fmt(stoch.percent_k)], ["%D", fmt(stoch.percent_d)]]);
+
+    const wr = signal.williams_r || {};
+    el("card-williams").innerHTML = this.kv([["%R", fmt(wr.value)]]);
+
+    const cq = signal.candle_quality || {};
+    el("card-candle-quality").innerHTML = this.kv([
+      ["Body ratio", fmt(cq.body_ratio)], ["Close position", fmt(cq.close_position)],
+      ["Pin bar", cq.is_pin_bar ? "yes" : "no"], ["Outside bar", cq.is_outside_bar ? "yes" : "no"],
+      ["Consecutive bull/bear", `${fmt(cq.consecutive_bullish)} / ${fmt(cq.consecutive_bearish)}`],
+      ["Range vs avg", cq.volatility_state || "n/a"],
+      ["Gap", cq.gap || "none"], ["Rejection", cq.rejection_at || "none"],
+      ["False breakout", cq.false_breakout || "none"],
+    ]);
+
+    el("card-data-quality").innerHTML = this.kv([
+      ["Score", `${fmt(signal.data_quality_score)} / 100`],
+      ["Notes", (signal.data_quality_notes || []).length ? (signal.data_quality_notes || []).join("; ") : "none"],
+    ]);
   },
 
   kv(pairs) {

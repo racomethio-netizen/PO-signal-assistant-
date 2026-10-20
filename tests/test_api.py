@@ -151,10 +151,25 @@ def test_config_rejects_weights_not_summing_to_one(client):
         "timeframe": "2m",
         "weights": {
             "trend": 0.5, "momentum": 0.5, "volatility": 0.5, "price_action": 0.5,
-            "support_resistance": 0.5, "indicator_confirmation": 0.5, "multi_timeframe": 0.5,
+            "support_resistance": 0.5, "multi_timeframe": 0.5,
+            "candle_quality": 0.5, "market_regime": 0.5,
         },
     })
     assert resp.status_code == 400
+
+
+def test_config_accepts_valid_weights_summing_to_one(client):
+    resp = client.post("/api/config", json={
+        "timeframe": "2m",
+        "weights": {
+            "trend": 0.15, "momentum": 0.15, "volatility": 0.10, "price_action": 0.15,
+            "support_resistance": 0.10, "multi_timeframe": 0.10,
+            "candle_quality": 0.15, "market_regime": 0.10,
+        },
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["timeframes"]["2m"]["weights"]["candle_quality"] == 0.15
 
 
 def test_rate_limiter_blocks_after_threshold():

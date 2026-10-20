@@ -33,6 +33,11 @@ class IndicatorSnapshot:
 
     candle_pattern: price_action.CandlePattern = None  # type: ignore[assignment]
     sr_levels: List[price_action.SRLevel] = field(default_factory=list)
+    candle_quality: price_action.CandleQuality = None  # type: ignore[assignment]
+
+    adx_result: trend.ADXResult = None  # type: ignore[assignment]
+    stochastic_result: momentum.StochasticResult = None  # type: ignore[assignment]
+    williams_r_series: List[Optional[float]] = field(default_factory=list)
 
     bandwidth_series: List[Optional[float]] = field(default_factory=list)
 
@@ -92,10 +97,20 @@ def build_snapshot(candles: Sequence[Candle], config: IndicatorConfig) -> Indica
         config.keltner_atr_multiplier,
     )
     snap.sar_result = sar_module.parabolic_sar(candles, config.sar_step, config.sar_max_step)
+    snap.adx_result = trend.adx(candles, config.adx_period)
+    snap.stochastic_result = momentum.stochastic(candles, config.stoch_k_period, config.stoch_d_period)
+    snap.williams_r_series = momentum.williams_r(candles, config.williams_period)
 
     snap.candle_pattern = price_action.classify_last_candle(candles)
     snap.sr_levels = price_action.find_support_resistance(
         candles, config.sr_lookback, config.sr_cluster_tolerance_pct
+    )
+    snap.candle_quality = price_action.analyze_candle_quality(
+        candles,
+        snap.sr_levels,
+        range_lookback=config.candle_quality_range_lookback,
+        gap_atr=snap.latest(snap.atr_series),
+        level_proximity_pct=config.candle_quality_level_proximity_pct,
     )
 
     return snap
