@@ -1,12 +1,12 @@
-"""Interface for a future authorized market-data adapter.
+"""Interface for an authorized market-data adapter.
 
-This module intentionally contains NO implementation that connects to
-Pocket Option or any other broker. It exists only as a typed extension
-point so that, in the future, a properly authorized market-data source
-(e.g. a licensed data vendor's public API) can be wired in without
-touching the indicator/strategy/signal code.
+This module itself contains NO implementation that connects to Pocket
+Option or any other broker — it's a typed extension point. One concrete
+implementation exists: ``data/binance_adapter.py``, using Binance's public
+(no-login) klines endpoint for crypto pairs. Any future implementation for
+another source must follow the same rules:
 
-Rules for any future implementation of this interface:
+Rules for any implementation of this interface:
   * It may only fetch read-only market data (OHLCV candles).
   * It must never accept, store, or transmit account credentials, 2FA
     codes, session cookies, or auth tokens for Pocket Option or any broker.

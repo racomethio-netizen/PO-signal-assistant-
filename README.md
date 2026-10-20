@@ -53,9 +53,10 @@ into `risk/` or `paper/` — it only ever receives an already-finalized
   history live in the API process's memory and reset on restart. There is no
   database. Adding persistence is straightforward future work that would not
   change any analysis/risk logic.
-- **No live market-data adapter.** `data/adapter.py` defines the interface for
-  a future authorized data source, but nothing implements it — you must
-  supply candles yourself (CSV/JSON/manual).
+- **Live data is crypto-only for now.** `data/adapter.py` defines the
+  interface for an authorized data source; `data/binance_adapter.py`
+  implements it against Binance's public API for crypto pairs. For forex/
+  stocks/commodities you still supply candles yourself (CSV/JSON/manual).
 - **No spread/price-quality feed.** OHLCV has no standard "spread" field, so
   the spread-based NO-TRADE filter described in the spec is not active for
   CSV/JSON/manual data; it would only become relevant if a future adapter
@@ -109,7 +110,7 @@ from your local `.env` file (not baked into the image).
 
 ## How to import market data
 
-Three ways, all available from the dashboard's **Market** panel or directly
+Four ways, all available from the dashboard's **Market** panel or directly
 via the API:
 
 1. **CSV upload** — a header row `timestamp,open,high,low,close,volume`
@@ -127,16 +128,31 @@ via the API:
    ```
 3. **Manual entry** — same shape as JSON, typed directly into the dashboard or
    posted to `/api/data/upload/manual`.
+4. **Fetch live from Binance (crypto pairs)** — `data/binance_adapter.py`
+   implements the `MarketDataAdapter` interface against Binance's public,
+   no-login, read-only klines endpoint. This has nothing to do with Pocket
+   Option — it's simply a real public data source for the same underlying
+   crypto pair (e.g. BTC/USDT) Pocket Option also offers, so you don't have
+   to transcribe candles by hand. Binance has no native 2-minute interval,
+   so a `2m` request fetches real 1-minute candles and aggregates
+   (resamples) them locally — it never invents a price.
+   ```bash
+   curl -X POST http://localhost:8000/api/data/fetch/binance \
+     -H "Content-Type: application/json" \
+     -d '{"asset":"BTCUSDT","timeframe":"3m","limit":200}'
+   ```
+   A network or upstream failure returns a clean `502` with the reason —
+   it never falls back to fabricated data.
 
 Valid timeframe labels: `1m, 2m, 3m, 5m, 15m, 30m, 1h`. Uploading a
 confirmation timeframe (e.g. `5m` or `15m` alongside `2m`) for the same asset
 lets the signal engine use real multi-timeframe confirmation — it never
 fabricates a higher timeframe you didn't supply.
 
-Every upload is validated for duplicate timestamps, invalid OHLC
-relationships (e.g. high below low), out-of-order candles, and gaps — bad
-data is rejected with a `422` and a clear reason; nothing is silently
-repaired or invented.
+Every upload (including a Binance fetch) is validated for duplicate
+timestamps, invalid OHLC relationships (e.g. high below low), out-of-order
+candles, and gaps — bad data is rejected with a `422`/`502` and a clear
+reason; nothing is silently repaired or invented.
 
 ## Generating signals
 
@@ -238,14 +254,17 @@ pip install -r requirements-dev.txt
 pytest tests/ -q
 ```
 
-85 tests cover indicator math, data validation (duplicates/gaps/stale/invalid
+100 tests cover indicator math, data validation (duplicates/gaps/stale/invalid
 OHLC/insufficient history), the signal engine (including NO-TRADE
 conditions and that future candles never change a past decision), risk
 limits (including that stake never increases after a loss), paper trading,
 backtesting (including a direct no-lookahead equivalence check against the
-live engine), the LLM provider's failure/malformed-response handling, and
-the API layer (including that paper trades require explicit confirmation
-and that risk/config validation rejects bad input).
+live engine), the LLM provider's failure/malformed-response handling, the
+Binance adapter (symbol normalization, resampling, pagination, unclosed-
+candle filtering, and upstream-failure handling — all with HTTP mocked, so
+the suite never depends on live network access), and the API layer
+(including that paper trades require explicit confirmation and that
+risk/config validation rejects bad input).
 
 ## Limitations & risk warnings
 

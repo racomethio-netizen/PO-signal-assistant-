@@ -22,6 +22,7 @@ load_dotenv()
 
 from data.loaders import DataFormatError, load_csv, load_json, load_manual
 from data.validation import validate_candles
+from data.binance_adapter import BinanceAdapter, BinanceDataFormatError
 from backtest.engine import BacktestEngine
 from backtest.walkforward import run_walk_forward
 from paper.simulator import PaperAccount
@@ -33,6 +34,7 @@ from .rate_limit import RateLimiter, client_key
 from .schemas import (
     AlertConfigRequest,
     BacktestRequest,
+    BinanceFetchRequest,
     JSONCandlesRequest,
     ManualCandlesRequest,
     PaperOpenRequest,
@@ -67,6 +69,9 @@ app.add_middleware(
 
 signal_limiter = RateLimiter(max_requests=30, window_seconds=60)
 backtest_limiter = RateLimiter(max_requests=10, window_seconds=60)
+binance_limiter = RateLimiter(max_requests=20, window_seconds=60)
+
+_binance_adapter = BinanceAdapter()
 
 
 def _timeframe_config(state: AppState, timeframe: str):
@@ -119,6 +124,30 @@ def upload_manual(body: ManualCandlesRequest, state: AppState = Depends(get_stat
         candles = load_manual([row.model_dump() for row in body.rows])
     except DataFormatError as exc:
         raise HTTPException(422, str(exc))
+    return _validate_and_store(state, body.asset, body.timeframe, candles)
+
+
+@app.post("/api/data/fetch/binance")
+def fetch_binance(
+    request: Request,
+    body: BinanceFetchRequest,
+    state: AppState = Depends(get_state),
+):
+    """Fetch real historical OHLCV candles for a crypto pair from Binance's
+    public (no-login, read-only) klines endpoint. Never touches Pocket
+    Option or any broker; cannot place an order."""
+    binance_limiter.check(client_key(request))
+    if body.timeframe not in TIMEFRAME_LABEL_SECONDS:
+        raise HTTPException(400, f"Unknown timeframe '{body.timeframe}'.")
+    seconds = TIMEFRAME_LABEL_SECONDS[body.timeframe]
+    try:
+        candles = _binance_adapter.fetch_candles(body.asset, seconds, body.limit)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    except BinanceDataFormatError as exc:
+        raise HTTPException(502, f"Binance fetch failed: {exc}")
+    if not candles:
+        raise HTTPException(502, f"Binance returned no candles for '{body.asset}' at {body.timeframe}.")
     return _validate_and_store(state, body.asset, body.timeframe, candles)
 
 

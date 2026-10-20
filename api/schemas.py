@@ -27,6 +27,12 @@ class JSONCandlesRequest(BaseModel):
     candles: List[Dict[str, Any]]
 
 
+class BinanceFetchRequest(BaseModel):
+    asset: str = Field(..., description="Binance symbol, e.g. 'BTCUSDT' or 'BTC/USDT'.")
+    timeframe: str
+    limit: int = Field(200, gt=0, le=1500, description="Number of closed candles to fetch.")
+
+
 class SignalGenerateRequest(BaseModel):
     asset: str
     timeframe: str

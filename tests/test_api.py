@@ -1,9 +1,12 @@
+from unittest.mock import patch
+
 import pytest
 from fastapi.testclient import TestClient
 
 import api.state as state_module
 from api.main import app
 from api.rate_limit import RateLimiter
+from data.binance_adapter import BinanceDataFormatError
 from tests.conftest import deterministic_series
 
 
@@ -162,3 +165,33 @@ def test_rate_limiter_blocks_after_threshold():
         limiter.check("client-a")
     # A different client key is independent.
     limiter.check("client-b")
+
+
+def test_fetch_binance_endpoint_stores_candles(client):
+    candles = deterministic_series(60, start_price=50000.0, drift=5.0, amplitude=10.0)
+    with patch("api.main._binance_adapter.fetch_candles", return_value=candles) as mock_fetch:
+        resp = client.post("/api/data/fetch/binance", json={
+            "asset": "BTCUSDT", "timeframe": "3m", "limit": 60,
+        })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["candle_count"] == 60
+    mock_fetch.assert_called_once()
+
+    status = client.get("/api/data/status?asset=BTCUSDT&timeframe=3m")
+    assert status.json()["candle_count"] == 60
+
+
+def test_fetch_binance_upstream_failure_returns_502(client):
+    with patch("api.main._binance_adapter.fetch_candles", side_effect=BinanceDataFormatError("boom")):
+        resp = client.post("/api/data/fetch/binance", json={
+            "asset": "BTCUSDT", "timeframe": "3m", "limit": 60,
+        })
+    assert resp.status_code == 502
+
+
+def test_fetch_binance_unknown_timeframe_rejected(client):
+    resp = client.post("/api/data/fetch/binance", json={
+        "asset": "BTCUSDT", "timeframe": "7m", "limit": 60,
+    })
+    assert resp.status_code == 400

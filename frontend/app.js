@@ -104,6 +104,19 @@ const App = {
     } catch (e) { alert("Upload failed: " + e.message); }
   },
 
+  async fetchBinance() {
+    const { timeframe } = currentAssetTf();
+    const asset = el("binance-symbol").value.trim();
+    const limit = parseInt(el("binance-limit").value) || 200;
+    if (!asset) { alert("Enter a Binance symbol, e.g. BTCUSDT."); return; }
+    try {
+      const data = await apiPost("/api/data/fetch/binance", { asset, timeframe, limit });
+      el("asset").value = asset;
+      alert(`Fetched ${data.candle_count} real candles from Binance for ${asset} ${timeframe}.`);
+      await this.refreshAll();
+    } catch (e) { alert("Binance fetch failed: " + e.message); }
+  },
+
   async generateSignal(explain) {
     const { asset, timeframe } = currentAssetTf();
     try {

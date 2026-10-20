@@ -63,6 +63,25 @@
         <button class="secondary" onclick="App.uploadJson()">Upload JSON</button>
       </div>
     </div>
+
+    <div class="row">
+      <div class="field">
+        <label>Fetch from Binance (crypto pairs)</label>
+        <input id="binance-symbol" value="BTCUSDT" placeholder="BTCUSDT" />
+      </div>
+      <div class="field">
+        <label>Candles</label>
+        <input id="binance-limit" type="number" value="200" min="10" max="1500" style="width:90px" />
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="secondary" onclick="App.fetchBinance()">Fetch real candles for Asset/Timeframe above</button>
+      </div>
+      <div class="field" style="color: var(--text-dim); font-size:11px; max-width:260px;">
+        Public, read-only, no account needed. Has nothing to do with Pocket Option — a real
+        public data source for the same underlying crypto pair.
+      </div>
+    </div>
   </div>
 
   <!-- 2. SIGNAL -->
