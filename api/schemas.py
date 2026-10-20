@@ -1,0 +1,95 @@
+"""Pydantic request/response models for the FastAPI app."""
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
+
+class OHLCVRow(BaseModel):
+    timestamp: Any
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float = 0.0
+
+
+class ManualCandlesRequest(BaseModel):
+    asset: str
+    timeframe: str
+    rows: List[OHLCVRow]
+
+
+class JSONCandlesRequest(BaseModel):
+    asset: str
+    timeframe: str
+    candles: List[Dict[str, Any]]
+
+
+class SignalGenerateRequest(BaseModel):
+    asset: str
+    timeframe: str
+    explain_with_llm: bool = False
+
+
+class RiskConfigRequest(BaseModel):
+    starting_balance: float = 1000.0
+    stake_mode: str = "percent"
+    fixed_stake_amount: float = 10.0
+    max_stake_pct: float = 0.01
+    max_daily_loss_pct: float = 0.03
+    max_consecutive_losses: int = 3
+    cooldown_trades: int = 5
+    max_trades_per_day: int = 20
+    payout_ratio: float = 0.8
+
+
+class WeightsRequest(BaseModel):
+    trend: float
+    momentum: float
+    volatility: float
+    price_action: float
+    support_resistance: float
+    indicator_confirmation: float
+    multi_timeframe: float
+
+
+class StrategyConfigRequest(BaseModel):
+    timeframe: str
+    weights: Optional[WeightsRequest] = None
+    min_score_threshold: Optional[float] = None
+
+
+class BacktestRequest(BaseModel):
+    asset: str
+    timeframe: str
+    payout_ratio: float = 0.8
+    min_score_threshold: Optional[float] = None
+    walk_forward: bool = False
+    n_windows: int = 4
+    train_ratio: float = 0.5
+    explain_with_llm: bool = False
+
+
+class PaperOpenRequest(BaseModel):
+    asset: str
+    timeframe: str
+    entry_price: float
+    confirm: bool = Field(..., description="Explicit user confirmation required to open a paper trade.")
+
+
+class PaperSettleRequest(BaseModel):
+    trade_id: str
+    exit_price: float
+
+
+class PaperResetRequest(BaseModel):
+    confirm: bool = Field(..., description="Explicit user confirmation required to reset the paper session.")
+
+
+class AlertConfigRequest(BaseModel):
+    min_confidence_to_alert: str = "HIGH"
+    browser_enabled: bool = True
+    sound_enabled: bool = True
+    telegram_enabled: bool = False

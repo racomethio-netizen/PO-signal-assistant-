@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Pocket Option Signal Assistant</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="banner">
+    ⚠ PROBABILISTIC TECHNICAL ANALYSIS ONLY — NOT FINANCIAL ADVICE. No signal or indicator
+    combination guarantees a winning trade. PAPER/DEMO mode only — this application never places
+    a real trade and never stores your Pocket Option password, 2FA code, or session tokens.
+  </div>
+
+  <div class="topbar">
+    <h1>Pocket Option Signal Assistant</h1>
+    <div id="risk-pill" class="risk-pill risk-ACTIVE">ACTIVE</div>
+  </div>
+
+  <!-- 1. MARKET -->
+  <div class="panel wide">
+    <h2>Market</h2>
+    <div class="row">
+      <div class="field">
+        <label>Asset</label>
+        <input id="asset" value="EURUSD" />
+      </div>
+      <div class="field">
+        <label>Timeframe</label>
+        <select id="timeframe">
+          <option value="2m">2 minute</option>
+          <option value="3m">3 minute</option>
+          <option value="15m">15 minute</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button onclick="App.refreshAll()">Refresh</button>
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="secondary" onclick="App.generateSignal(true)">Generate signal (with AI explanation)</button>
+      </div>
+      <div class="field" id="data-status" style="margin-left:auto; color: var(--text-dim); font-size:12px;"></div>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label>Upload CSV</label>
+        <input type="file" id="csv-file" accept=".csv" />
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="secondary" onclick="App.uploadCsv()">Upload CSV for Asset/Timeframe</button>
+      </div>
+      <div class="field" style="flex:1; min-width:280px;">
+        <label>Or paste JSON OHLCV array</label>
+        <textarea id="json-input" rows="2" style="width:100%" placeholder='[{"timestamp":"2026-01-01T00:00:00Z","open":1,"high":1.01,"low":0.99,"close":1.005,"volume":100}, ...]'></textarea>
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="secondary" onclick="App.uploadJson()">Upload JSON</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2. SIGNAL -->
+  <div class="panel wide signal-card">
+    <div id="signal-direction" class="signal-direction dir-NO_TRADE">—</div>
+    <div class="signal-meta" id="signal-meta">Generate a signal to begin.</div>
+    <div class="signal-score-bar"><div id="signal-score-fill" class="signal-score-fill" style="width:0%; background:var(--neutral);"></div></div>
+    <div class="signal-meta" id="signal-expiry"></div>
+    <div id="signal-explanation" class="signal-meta" style="margin-top:8px; font-style: italic;"></div>
+  </div>
+
+  <div class="grid">
+    <div class="panel reasons">
+      <h2>Reasons Supporting</h2>
+      <ul id="reasons-supporting" class="supporting"></ul>
+    </div>
+    <div class="panel reasons">
+      <h2>Reasons Against</h2>
+      <ul id="reasons-against" class="against"></ul>
+    </div>
+    <div class="panel">
+      <h2>Invalidation &amp; Risk</h2>
+      <div id="invalidation" style="font-size:13px; margin-bottom:8px;"></div>
+      <div id="risk-warning" class="disclaimer"></div>
+    </div>
+  </div>
+
+  <!-- 3. TECHNICAL ANALYSIS -->
+  <h2>Technical Analysis</h2>
+  <div class="grid" id="ta-cards">
+    <div class="panel"><h3>MACD (12,26,9)</h3><div id="card-macd"></div></div>
+    <div class="panel"><h3>RSI (14)</h3><div id="card-rsi"></div></div>
+    <div class="panel"><h3>Bollinger Bands (20, 2σ)</h3><div id="card-bollinger"></div></div>
+    <div class="panel"><h3>Parabolic SAR</h3><div id="card-sar"></div></div>
+    <div class="panel"><h3>EMA / SMA</h3><div id="card-ma"></div></div>
+    <div class="panel"><h3>Volatility / ATR</h3><div id="card-volatility"></div></div>
+    <div class="panel"><h3>Support / Resistance</h3><div id="card-sr"></div></div>
+    <div class="panel"><h3>Price Action</h3><div id="card-price-action"></div></div>
+  </div>
+
+  <!-- 4. MULTI-TIMEFRAME -->
+  <h2>Multi-Timeframe</h2>
+  <div class="panel wide">
+    <table>
+      <thead><tr><th>Timeframe</th><th>Trend</th><th>Momentum</th><th>Signal</th><th>Confidence</th></tr></thead>
+      <tbody id="mtf-body"></tbody>
+    </table>
+  </div>
+
+  <!-- 7. RISK STATUS -->
+  <h2>Risk Status</h2>
+  <div class="panel wide" id="risk-detail"></div>
+
+  <!-- 6. PAPER ACCOUNT -->
+  <h2>Paper Account (Demo)</h2>
+  <div class="panel wide">
+    <div class="grid" id="paper-summary"></div>
+    <div class="row">
+      <div class="field">
+        <label>Entry price (for latest signal)</label>
+        <input id="paper-entry-price" type="number" step="any" />
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button onclick="App.openPaperTrade()">Open paper trade (confirm)</button>
+      </div>
+      <div class="field">
+        <label>Trade ID</label>
+        <input id="settle-trade-id" />
+      </div>
+      <div class="field">
+        <label>Exit price</label>
+        <input id="settle-exit-price" type="number" step="any" />
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="secondary" onclick="App.settlePaperTrade()">Settle trade</button>
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="danger" onclick="App.resetPaper()">Reset paper session</button>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th>Time</th><th>Asset</th><th>TF</th><th>Signal</th><th>Entry</th><th>Exit</th><th>Status</th><th>Profit</th><th>Balance</th></tr></thead>
+      <tbody id="paper-history-body"></tbody>
+    </table>
+  </div>
+
+  <!-- 5. SIGNAL HISTORY -->
+  <h2>Signal History</h2>
+  <div class="panel wide">
+    <table>
+      <thead><tr><th>Time</th><th>Asset</th><th>Timeframe</th><th>Signal</th><th>Confidence</th><th>Score</th><th>Result</th></tr></thead>
+      <tbody id="history-body"></tbody>
+    </table>
+  </div>
+
+  <!-- 8. BACKTEST -->
+  <h2>Backtest (Historical Simulation)</h2>
+  <div class="panel wide">
+    <div class="row">
+      <div class="field"><label>Payout ratio</label><input id="bt-payout" type="number" step="0.01" value="0.8" /></div>
+      <div class="field"><label>Min score threshold</label><input id="bt-threshold" type="number" step="1" value="35" /></div>
+      <div class="field"><label>Walk-forward?</label>
+        <select id="bt-walkforward"><option value="false">No</option><option value="true">Yes</option></select>
+      </div>
+      <div class="field"><label>Windows</label><input id="bt-windows" type="number" value="4" /></div>
+      <div class="field"><label>&nbsp;</label><button onclick="App.runBacktest()">Run backtest</button></div>
+    </div>
+    <div id="bt-disclaimer" class="disclaimer"></div>
+    <pre id="bt-result" class="data-json"></pre>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
