@@ -131,6 +131,10 @@ class Signal:
     candle_quality: Dict[str, Any] = field(default_factory=dict)
     data_quality_score: float = 100.0
 
+    # The last closed candle's close price at signal time — an entry
+    # REFERENCE price for the signal history, not a live/current quote.
+    reference_price: Optional[float] = None
+
     data_quality_notes: List[str] = field(default_factory=list)
     explanation: Optional[str] = None  # LLM-generated narrative, if available
     risk_warning: str = RISK_WARNING
@@ -161,6 +165,7 @@ class Signal:
             "williams_r": self.williams_r,
             "candle_quality": self.candle_quality,
             "data_quality_score": round(self.data_quality_score, 1),
+            "reference_price": self.reference_price,
             "reasons_supporting": self.reasons_supporting,
             "reasons_against": self.reasons_against,
             "invalidation_condition": self.invalidation_condition,

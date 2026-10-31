@@ -141,6 +141,7 @@ class SignalEngine:
             williams_r=self._williams_card(snap),
             candle_quality=self._candle_quality_card(snap, raw_scores["candle_quality"]),
             data_quality_score=data_quality_score,
+            reference_price=snap.last_close,
             reasons_supporting=reasons_supporting,
             reasons_against=reasons_against,
             invalidation_condition=invalidation,

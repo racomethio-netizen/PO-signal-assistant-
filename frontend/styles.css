@@ -54,6 +54,20 @@ h2 { font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-
 .risk-CAUTION { background: #2a230f; color: var(--warn); border: 1px solid var(--warn); }
 .risk-TRADING_PAUSED { background: #2a0f12; color: var(--put); border: 1px solid var(--put); }
 
+.conn-pill {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: default;
+}
+.conn-CONNECTED { background: #0f2a1c; color: var(--call); border: 1px solid var(--call); }
+.conn-DISCONNECTED { background: #1b2234; color: var(--text-dim); border: 1px solid var(--panel-border); }
+.conn-STALE_DATA { background: #2a230f; color: var(--warn); border: 1px solid var(--warn); }
+.conn-AUTHENTICATION_ERROR,
+.conn-RATE_LIMIT,
+.conn-UNSUPPORTED_INSTRUMENT { background: #2a0f12; color: var(--put); border: 1px solid var(--put); }
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));

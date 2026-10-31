@@ -15,7 +15,10 @@
 
   <div class="topbar">
     <h1>Pocket Option Signal Assistant</h1>
-    <div id="risk-pill" class="risk-pill risk-ACTIVE">ACTIVE</div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <div id="conn-pill" class="conn-pill conn-DISCONNECTED" title="No market-data provider configured.">Market data: DISCONNECTED</div>
+      <div id="risk-pill" class="risk-pill risk-ACTIVE">ACTIVE</div>
+    </div>
   </div>
 
   <!-- 1. MARKET -->
@@ -23,12 +26,13 @@
     <h2>Market</h2>
     <div class="row">
       <div class="field">
-        <label>Asset</label>
-        <input id="asset" value="EURUSD" />
+        <label>Currency pair / asset</label>
+        <input id="asset" value="EURUSD" list="instrument-datalist" oninput="App.onAssetInput()" />
+        <datalist id="instrument-datalist"></datalist>
       </div>
       <div class="field">
         <label>Timeframe</label>
-        <select id="timeframe">
+        <select id="timeframe" onchange="App.refreshAll()">
           <option value="2m">2 minute</option>
           <option value="3m">3 minute</option>
           <option value="15m">15 minute</option>
@@ -43,6 +47,34 @@
         <button class="secondary" onclick="App.generateSignal(true)">Generate signal (with AI explanation)</button>
       </div>
       <div class="field" id="data-status" style="margin-left:auto; color: var(--text-dim); font-size:12px;"></div>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label>Category</label>
+        <select id="instrument-filter-category" onchange="App.loadInstrumentList()">
+          <option value="">All</option>
+          <option value="FOREX">Forex</option>
+          <option value="CRYPTO">Crypto</option>
+          <option value="OTHER">Other</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Instrument type</label>
+        <select id="instrument-filter-type" onchange="App.loadInstrumentList()">
+          <option value="">All</option>
+          <option value="STANDARD">Standard</option>
+          <option value="OTC">OTC</option>
+        </select>
+      </div>
+      <div class="field" style="flex:1; min-width:200px;">
+        <label>Search pairs</label>
+        <input id="instrument-search" placeholder="e.g. GBP, JPY..." oninput="App.loadInstrumentList()" />
+      </div>
+      <div class="field" style="flex:2; min-width:320px;">
+        <label>Instrument info</label>
+        <div id="instrument-info" class="disclaimer" style="margin:0;">Select a pair above.</div>
+      </div>
     </div>
 
     <div class="row">
@@ -80,6 +112,22 @@
       <div class="field" style="color: var(--text-dim); font-size:11px; max-width:260px;">
         Public, read-only, no account needed. Has nothing to do with Pocket Option — a real
         public data source for the same underlying crypto pair.
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label>Fetch from configured provider (forex/standard pairs)</label>
+        <input id="provider-limit" type="number" value="200" min="10" max="1500" style="width:90px" placeholder="candles" />
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
+        <button class="secondary" onclick="App.fetchFromProvider()">Fetch real candles for Asset/Timeframe above</button>
+      </div>
+      <div class="field" style="color: var(--text-dim); font-size:11px; max-width:320px;">
+        Uses whichever MARKET_DATA_PROVIDER is set in the server's environment (see .env.example).
+        Read-only market data from a data vendor — never Pocket Option itself, never a login,
+        never a trade. Disabled (503) until a provider is configured.
       </div>
     </div>
   </div>
@@ -199,6 +247,29 @@
     </div>
     <div id="bt-disclaimer" class="disclaimer"></div>
     <pre id="bt-result" class="data-json"></pre>
+  </div>
+
+  <!-- 9. PAIR COMPARISON -->
+  <h2>Pair Comparison</h2>
+  <div class="panel wide">
+    <div class="row">
+      <div class="field">
+        <label>Timeframe</label>
+        <select id="compare-timeframe">
+          <option value="2m">2 minute</option>
+          <option value="3m">3 minute</option>
+          <option value="15m">15 minute</option>
+        </select>
+      </div>
+      <div class="field"><label>&nbsp;</label>
+        <button onclick="App.runComparison()">Rank pairs with loaded data</button>
+      </div>
+    </div>
+    <div id="compare-note" class="disclaimer"></div>
+    <table>
+      <thead><tr><th>Pair</th><th>Direction</th><th>Confidence</th><th>Score</th><th>Regime</th><th>Data Quality</th><th>Rank Score</th></tr></thead>
+      <tbody id="compare-body"></tbody>
+    </table>
   </div>
 
   <script src="app.js"></script>

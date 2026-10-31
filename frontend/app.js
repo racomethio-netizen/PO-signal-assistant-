@@ -56,7 +56,10 @@ function maybeBrowserNotify(signal, alertDecision) {
 
 const App = {
   async refreshAll() {
+    await this.loadInstrumentList();
+    await this.loadInstrumentInfo();
     await this.loadDataStatus();
+    await this.loadConnectionStatus();
     await this.generateSignal(false);
     await this.loadMultiTimeframe();
     await this.loadPaperAccount();
@@ -75,6 +78,99 @@ const App = {
     } catch (e) { el("data-status").textContent = ""; }
   },
 
+  async loadConnectionStatus() {
+    const pill = el("conn-pill");
+    try {
+      const d = await apiGet("/api/market-data/status");
+      const cls = safeClass(d.status);
+      pill.className = "conn-pill conn-" + cls;
+      pill.textContent = `Market data: ${d.status}${d.provider ? " (" + d.provider + ")" : ""}`;
+      const lastUpdate = d.last_successful_update ? new Date(d.last_successful_update).toLocaleString() : "never";
+      pill.title = `${d.message || ""} · last successful update: ${lastUpdate}`;
+    } catch (e) {
+      pill.className = "conn-pill conn-DISCONNECTED";
+      pill.textContent = "Market data: DISCONNECTED";
+      pill.title = "Could not reach the market-data status endpoint.";
+    }
+  },
+
+  async fetchFromProvider() {
+    const { asset, timeframe } = currentAssetTf();
+    const limit = parseInt(el("provider-limit").value) || 200;
+    if (!asset) { alert("Enter/select an asset first."); return; }
+    try {
+      const data = await apiPost("/api/data/fetch/provider", { asset, timeframe, limit });
+      alert(`Fetched ${data.candle_count} real candles from the configured provider for ${asset} ${timeframe}.`);
+      await this.refreshAll();
+    } catch (e) {
+      alert("Provider fetch failed: " + e.message);
+      await this.loadConnectionStatus();
+    }
+  },
+
+  async loadInstrumentList() {
+    const category = el("instrument-filter-category").value;
+    const type = el("instrument-filter-type").value;
+    const query = el("instrument-search").value.trim();
+    const params = new URLSearchParams();
+    if (category) params.set("category", category);
+    if (type) params.set("instrument_type", type);
+    if (query) params.set("query", query);
+    try {
+      const list = await apiGet(`/api/instruments?${params.toString()}`);
+      const datalist = el("instrument-datalist");
+      datalist.innerHTML = list.map((i) =>
+        `<option value="${i.symbol}">${i.display_name} — ${i.category}${i.instrument_type === "OTC" ? " (OTC)" : ""}</option>`
+      ).join("");
+    } catch (e) { /* ignore */ }
+  },
+
+  async onAssetInput() {
+    await this.loadInstrumentInfo();
+  },
+
+  async loadInstrumentInfo() {
+    const { asset } = currentAssetTf();
+    if (!asset) return;
+    try {
+      const info = await apiGet(`/api/instruments/${encodeURIComponent(asset)}`);
+      const freshness = info.last_successful_data_timestamp
+        ? new Date(info.last_successful_data_timestamp).toLocaleString()
+        : "no data loaded";
+      el("instrument-info").innerHTML =
+        `<b>${info.display_name}</b> · ${info.instrument_type} · source: ${info.data_source} · ` +
+        `status: <b>${info.availability_status}</b> · last data: ${freshness}`;
+    } catch (e) {
+      el("instrument-info").textContent =
+        `'${asset}' is not a registered instrument yet — uploading data for it will register it automatically.`;
+    }
+  },
+
+  async runComparison() {
+    const timeframe = el("compare-timeframe").value;
+    el("compare-body").innerHTML = "";
+    el("compare-note").textContent = "Running...";
+    try {
+      const result = await apiPost("/api/instruments/compare", { timeframe });
+      if (result.message) {
+        el("compare-note").textContent = result.message;
+        return;
+      }
+      el("compare-note").textContent = `${result.note} (sample size: ${result.sample_size})`;
+      el("compare-body").innerHTML = result.candidates.map((c) => `<tr>
+        <td>${c.display_name}</td>
+        <td class="dir-${safeClass(c.direction)}">${c.direction}</td>
+        <td>${c.confidence}</td>
+        <td>${c.score}</td>
+        <td>${c.market_regime}</td>
+        <td>${c.data_quality_score}</td>
+        <td>${c.composite_rank_score}</td>
+        </tr>`).join("");
+    } catch (e) {
+      el("compare-note").textContent = "Error: " + e.message;
+    }
+  },
+
   async uploadCsv() {
     const { asset, timeframe } = currentAssetTf();
     const fileInput = el("csv-file");
@@ -89,6 +185,8 @@ const App = {
       if (!resp.ok) throw new Error(JSON.stringify(data.detail));
       alert(`Loaded ${data.candle_count} candles.`);
       await this.loadDataStatus();
+      await this.loadInstrumentInfo();
+      await this.loadInstrumentList();
     } catch (e) { alert("Upload failed: " + e.message); }
   },
 
@@ -101,6 +199,8 @@ const App = {
       const data = await apiPost("/api/data/upload/json", { asset, timeframe, candles });
       alert(`Loaded ${data.candle_count} candles.`);
       await this.loadDataStatus();
+      await this.loadInstrumentInfo();
+      await this.loadInstrumentList();
     } catch (e) { alert("Upload failed: " + e.message); }
   },
 

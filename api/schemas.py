@@ -33,6 +33,12 @@ class BinanceFetchRequest(BaseModel):
     limit: int = Field(200, gt=0, le=1500, description="Number of closed candles to fetch.")
 
 
+class MarketDataFetchRequest(BaseModel):
+    asset: str = Field(..., description="Instrument symbol as known to the registry, e.g. 'EURUSD'.")
+    timeframe: str
+    limit: int = Field(200, gt=0, le=1500, description="Number of closed candles to fetch.")
+
+
 class SignalGenerateRequest(BaseModel):
     asset: str
     timeframe: str
@@ -100,3 +106,21 @@ class AlertConfigRequest(BaseModel):
     browser_enabled: bool = True
     sound_enabled: bool = True
     telegram_enabled: bool = False
+
+
+class InstrumentRegisterRequest(BaseModel):
+    symbol: str = Field(..., description="Canonical instrument id, e.g. 'EURUSD', 'EURUSD_OTC', 'BTCUSDT'.")
+    display_name: str
+    base_currency: str
+    quote_currency: str
+    category: str = Field("FOREX", description="FOREX | CRYPTO | OTHER")
+    instrument_type: str = Field("STANDARD", description="STANDARD | OTC")
+    data_source: str = Field("manual", description="binance | manual | unconfigured")
+    supported_timeframes: List[str] = ["2m", "3m", "15m"]
+
+
+class InstrumentCompareRequest(BaseModel):
+    timeframe: str
+    symbols: Optional[List[str]] = Field(
+        None, description="Limit comparison to these symbols; omit to compare every instrument with loaded data."
+    )
