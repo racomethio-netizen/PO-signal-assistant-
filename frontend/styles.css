@@ -59,8 +59,20 @@ h2 { font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-
   border-radius: 999px;
   font-weight: 600;
   font-size: 12px;
-  cursor: default;
+  cursor: pointer;
 }
+
+label.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  height: 31px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+label.toggle input { width: 16px; height: 16px; padding: 0; }
 .conn-CONNECTED { background: #0f2a1c; color: var(--call); border: 1px solid var(--call); }
 .conn-DISCONNECTED { background: #1b2234; color: var(--text-dim); border: 1px solid var(--panel-border); }
 .conn-STALE_DATA { background: #2a230f; color: var(--warn); border: 1px solid var(--warn); }

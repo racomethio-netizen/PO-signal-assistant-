@@ -38,6 +38,7 @@ from instruments import (
     otc_data_unavailable_reason,
 )
 from instruments.providers import (
+    NO_REQUEST_YET,
     ConnectionStatus,
     ProviderAuthenticationError,
     ProviderConfigError,
@@ -195,7 +196,7 @@ def fetch_binance(
         # crypto pair — register it as such rather than falling through to
         # the generic guess _validate_and_store would otherwise make.
         state.asset_registry.register(crypto_instrument(body.asset.upper().replace("/", "")))
-    return _validate_and_store(state, body.asset, body.timeframe, candles)
+    return _validate_and_store(state, body.asset, body.timeframe, candles, source="binance", keep_uploads=body.keep_uploads)
 
 
 # --- Generic market-data provider (STEP 2-8: provider-agnostic adapter) ----
@@ -216,9 +217,11 @@ def _require_provider(state: AppState):
 
 
 @app.get("/api/market-data/status")
-def market_data_status(state: AppState = Depends(get_state)):
+def market_data_status(probe: bool = False, state: AppState = Depends(get_state)):
     """STEP 8: connection status for the dashboard — reflects the most
-    recent real call to the configured provider, never a fabricated 'ok'."""
+    recent real call to the configured provider, never a fabricated 'ok'.
+    If the provider has never been called yet (or ``probe=true``), one
+    cheap price lookup is made first so the status is real, not a guess."""
     try:
         provider = state.market_data_provider()
     except ProviderConfigError as exc:
@@ -231,6 +234,8 @@ def market_data_status(state: AppState = Depends(get_state)):
         return {"configured": False, "provider": None, "status": "DISCONNECTED",
                 "message": "No MARKET_DATA_PROVIDER configured.", "last_successful_update": None}
     status = provider.get_data_status()
+    if probe or status.message == NO_REQUEST_YET:
+        status = provider.test_connection()
     out = status.to_dict()
     out["configured"] = True
     return out
@@ -305,10 +310,19 @@ def fetch_from_provider(
                 base_currency=base, quote_currency=quote, category=InstrumentCategory.FOREX,
                 instrument_type=InstrumentType.STANDARD, data_source=DataSource.TWELVEDATA,
             ))
-    return _validate_and_store(state, body.asset, body.timeframe, candles)
+    return _validate_and_store(state, body.asset, body.timeframe, candles, source=provider.name, keep_uploads=body.keep_uploads)
 
 
-def _validate_and_store(state: AppState, asset: str, timeframe: str, candles):
+def _validate_and_store(
+    state: AppState, asset: str, timeframe: str, candles, source: str = "upload", keep_uploads: bool = False,
+):
+    if keep_uploads and state.is_uploaded(asset, timeframe):
+        kept = state.get_candles(asset, timeframe)
+        return {
+            "asset": asset, "timeframe": timeframe, "candle_count": len(kept),
+            "first_timestamp": kept[0].timestamp.isoformat(), "last_timestamp": kept[-1].timestamp.isoformat(),
+            "kept_upload": True, "warnings": [],
+        }
     seconds = TIMEFRAME_LABEL_SECONDS[timeframe]
     validation = validate_candles(candles, seconds, min_candles=3, max_stale_seconds=None)
     if not validation.ok:
@@ -317,7 +331,7 @@ def _validate_and_store(state: AppState, asset: str, timeframe: str, candles):
             "errors": [e.message for e in validation.errors],
             "warnings": [w.message for w in validation.warnings],
         })
-    state.store_candles(asset, timeframe, candles)
+    state.store_candles(asset, timeframe, candles, source=source)
     return {
         "asset": asset,
         "timeframe": timeframe,
@@ -339,6 +353,7 @@ def data_status(asset: str, timeframe: str, state: AppState = Depends(get_state)
         "candle_count": len(candles),
         "first_timestamp": candles[0].timestamp.isoformat(),
         "last_timestamp": candles[-1].timestamp.isoformat(),
+        "source": state.candle_sources.get(asset, {}).get(timeframe, "upload"),
     }
 
 

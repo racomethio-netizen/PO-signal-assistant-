@@ -27,16 +27,21 @@ class JSONCandlesRequest(BaseModel):
     candles: List[Dict[str, Any]]
 
 
+KEEP_UPLOADS_DESCRIPTION = "If true, candles the user uploaded for this asset/timeframe are kept, not replaced."
+
+
 class BinanceFetchRequest(BaseModel):
     asset: str = Field(..., description="Binance symbol, e.g. 'BTCUSDT' or 'BTC/USDT'.")
     timeframe: str
     limit: int = Field(200, gt=0, le=1500, description="Number of closed candles to fetch.")
+    keep_uploads: bool = Field(False, description=KEEP_UPLOADS_DESCRIPTION)
 
 
 class MarketDataFetchRequest(BaseModel):
     asset: str = Field(..., description="Instrument symbol as known to the registry, e.g. 'EURUSD'.")
     timeframe: str
     limit: int = Field(200, gt=0, le=1500, description="Number of closed candles to fetch.")
+    keep_uploads: bool = Field(False, description=KEEP_UPLOADS_DESCRIPTION)
 
 
 class SignalGenerateRequest(BaseModel):

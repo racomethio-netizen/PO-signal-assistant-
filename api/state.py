@@ -53,6 +53,8 @@ def _env_int(name: str, default: int) -> int:
 @dataclass
 class AppState:
     candle_store: Dict[str, Dict[str, List[Candle]]] = field(default_factory=dict)
+    # Where each asset/timeframe's candles came from: "upload" or a live source name.
+    candle_sources: Dict[str, Dict[str, str]] = field(default_factory=dict)
     asset_registry: AssetRegistry = field(default_factory=AssetRegistry)
     _market_data_provider: Optional[MarketDataProvider] = field(default=None, init=False, repr=False)
     timeframe_configs: Dict[str, TimeframeConfig] = field(
@@ -100,8 +102,9 @@ class AppState:
             llm_provider=self.llm_provider,
         )
 
-    def store_candles(self, asset: str, timeframe: str, candles: List[Candle]) -> None:
+    def store_candles(self, asset: str, timeframe: str, candles: List[Candle], source: str = "upload") -> None:
         self.candle_store.setdefault(asset, {})[timeframe] = candles
+        self.candle_sources.setdefault(asset, {})[timeframe] = source
         if not self.asset_registry.is_known(asset):
             self.asset_registry.register(guess_instrument(asset))
 
@@ -120,9 +123,18 @@ class AppState:
     def get_candles(self, asset: str, timeframe: str) -> Optional[List[Candle]]:
         return self.candle_store.get(asset, {}).get(timeframe)
 
+    def is_uploaded(self, asset: str, timeframe: str) -> bool:
+        return self.candle_sources.get(asset, {}).get(timeframe) == "upload"
+
     def get_confirmation_candles(self, asset: str, exclude_timeframe: str) -> Dict[str, List[Candle]]:
+        # Uploaded and live candles usually cover different periods, so one
+        # is never used to confirm the other.
+        uploaded = self.is_uploaded(asset, exclude_timeframe)
         assets = self.candle_store.get(asset, {})
-        return {tf: candles for tf, candles in assets.items() if tf != exclude_timeframe}
+        return {
+            tf: candles for tf, candles in assets.items()
+            if tf != exclude_timeframe and self.is_uploaded(asset, tf) == uploaded
+        }
 
     def record_signal(self, signal: Signal) -> None:
         self.signal_history.append(signal)

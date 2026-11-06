@@ -239,6 +239,24 @@ via the API:
    symbol the configured provider doesn't cover (checked **before** any
    network call), `401`/`429`/`502` for auth/rate-limit/network failures.
 
+   **On the dashboard this is automatic.** Opening the page, pressing
+   **Refresh**, or picking a pair/timeframe fetches live candles for all
+   three timeframes (2m/3m/15m) from the right source — the configured
+   provider for forex, Binance for crypto, nothing for OTC (with a message
+   saying so). With **Auto-update** on (the default), the dashboard checks
+   every 20 seconds but only calls the data API for a timeframe once its
+   next candle has actually closed, then regenerates the signal — about
+   54 API calls per hour for one pair, so Twelve Data's free tier (8 per
+   minute, 800 per day) covers roughly 14 hours of continuous use. When
+   the market is closed (weekends), it re-checks only every 10 minutes.
+
+   Candles you upload yourself are never replaced by this automatic
+   fetching (the dashboard sends `"keep_uploads": true`, enforced on the
+   server), and uploaded and live candles are never used to confirm each
+   other in multi-timeframe analysis — they usually cover different
+   periods. An explicit fetch (the fetch buttons, or the API without
+   `keep_uploads`) still replaces them, as before.
+
 Valid timeframe labels: `1m, 2m, 3m, 5m, 15m, 30m, 1h`. Uploading a
 confirmation timeframe (e.g. `5m` or `15m` alongside `2m`) for the same asset
 lets the signal engine use real multi-timeframe confirmation — it never
@@ -290,10 +308,18 @@ Two implementations ship today:
 - `instruments/providers/binance_provider.py` — wraps the existing,
   unchanged `BinanceAdapter` for crypto pairs.
 - `instruments/providers/twelvedata.py` — calls Twelve Data's public REST
-  API for standard-market forex pairs. Twelve Data has no native 2-minute
-  interval, so a `2m` request fetches native 1-minute candles and
-  resamples them locally using the exact same `resample()` function the
-  Binance adapter already uses — never a fabricated candle.
+  API for standard-market forex pairs. Details that matter for live use:
+  - Twelve Data's newest row is always the **still-forming** current
+    candle; it is dropped, so the signal engine only ever sees closed
+    candles (otherwise every live signal would be refused as
+    `DATA UNAVAILABLE`).
+  - Twelve Data has no native 2- or 3-minute interval, so those are built
+    from real 1-minute candles grouped on **clock boundaries** — 2m
+    candles start on even minutes, 3m on :00/:03/:06 — matching a broker
+    chart. A bucket missing any minute is dropped, never padded.
+  - If the newest closed candle is old (market closed for the weekend or a
+    holiday), the status becomes `STALE DATA` with an explanation; the
+    real candles are still returned, never replaced.
 
 `instruments/providers/config.py` reads `MARKET_DATA_PROVIDER` once at
 startup (lazily, cached on `AppState`) and builds whichever provider is
@@ -313,9 +339,13 @@ asked to return data for an instrument it doesn't actually serve.
 `GET /api/market-data/status` reflects the outcome of the most recent real
 provider call — never a fabricated "ok" — as one of exactly six values:
 `CONNECTED`, `DISCONNECTED`, `STALE DATA`, `AUTHENTICATION ERROR`,
-`RATE LIMIT`, `UNSUPPORTED INSTRUMENT`. The dashboard shows this as a
-pill in the top bar next to the risk status, alongside the configured
-provider's name and the last successful update time.
+`RATE LIMIT`, `UNSUPPORTED INSTRUMENT`. If the provider hasn't been called
+yet since the server started, the endpoint first makes one cheap price
+lookup (1 API credit) so the status is real rather than a placeholder;
+`?probe=true` forces a fresh check. The dashboard shows this as a pill in
+the top bar next to the risk status, with the provider's message and the
+last successful update time written out underneath (tooltips don't work
+on phones). Tap the pill to re-test the connection.
 
 `GET /api/market-data/instruments` returns the provider's own instrument
 catalogue (not the app's registry) — `503` if nothing is configured.

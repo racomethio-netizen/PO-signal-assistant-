@@ -18,6 +18,7 @@ from data.binance_adapter import BINANCE_BASE_URL, BinanceAdapter, BinanceDataFo
 from data.models import Candle
 
 from .base import (
+    NO_REQUEST_YET,
     ConnectionStatus,
     DataStatus,
     MarketDataProvider,
@@ -32,13 +33,13 @@ TICKER_PRICE_ENDPOINT = "/api/v3/ticker/price"   # real, documented Binance endp
 
 class BinanceProvider(MarketDataProvider):
     name = "binance"
+    probe_symbol = "BTCUSDT"
 
     def __init__(self, timeout_seconds: float = 15.0) -> None:
         self._adapter = BinanceAdapter(timeout_seconds=timeout_seconds)
         self._timeout = timeout_seconds
         self._last_status = DataStatus(
-            provider=self.name, status=ConnectionStatus.DISCONNECTED,
-            message="No request made yet.",
+            provider=self.name, status=ConnectionStatus.DISCONNECTED, message=NO_REQUEST_YET,
         )
 
     def _record_success(self) -> None:

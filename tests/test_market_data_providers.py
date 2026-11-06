@@ -102,9 +102,10 @@ def test_factory_respects_custom_base_url():
 
 # --- TwelveDataProvider: successful retrieval -------------------------
 def test_get_candles_native_interval_success(monkeypatch):
-    rows = [_td_row(f"2026-01-01 00:{i:02d}:00", 1.08, 1.081, 1.079, 1.0805) for i in range(20)]
+    rows = [_td_row(f"2026-01-01 {i // 4:02d}:{(i % 4) * 15:02d}:00", 1.08, 1.081, 1.079, 1.0805) for i in range(20)]
     fake = _patch_client(monkeypatch, [FakeResponse({"values": rows, "status": "ok"})])
-    provider = TwelveDataProvider(api_key="k")
+    # 1 minute after the last (04:45) candle closed at 05:00
+    provider = TwelveDataProvider(api_key="k", clock=lambda: datetime(2026, 1, 1, 5, 1, tzinfo=timezone.utc))
     candles = provider.get_candles("EURUSD", 900, 15)  # 15m native
     assert len(candles) == 15
     assert fake.calls[0][1]["interval"] == "15min"

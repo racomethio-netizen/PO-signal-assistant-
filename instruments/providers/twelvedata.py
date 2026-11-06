@@ -7,9 +7,12 @@ broker, and nothing here can place an order.
 
 Twelve Data has no native 2-minute or 3-minute interval (its intervals
 are 1min/5min/15min/30min/45min/1h/2h/4h/1day/1week/1month) — those two
-timeframes are built by fetching real 1-minute candles and aggregating
-them with the SAME ``resample()`` already used (and tested) for Binance's
-2-minute handling, reused as-is rather than reimplemented.
+timeframes are built by fetching real 1-minute candles and grouping them
+into wall-clock-aligned buckets (see ``aggregate_clock_aligned``).
+
+The newest row of every Twelve Data time series is the still-forming
+current candle; it is always dropped here, so only CLOSED candles ever
+reach the signal engine.
 
 Twelve Data has no concept of OTC instruments at all, so any OTC-flagged
 instrument is rejected outright here rather than silently served
@@ -17,15 +20,15 @@ standard-market data under an OTC label.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Dict, List, Optional
 
 import httpx
 
-from data.binance_adapter import resample
 from data.models import Candle
 
 from .base import (
+    NO_REQUEST_YET,
     ConnectionStatus,
     DataStatus,
     MarketDataProvider,
@@ -44,6 +47,44 @@ TIME_SERIES_ENDPOINT = "/time_series"
 NATIVE_INTERVALS: Dict[int, str] = {
     60: "1min", 300: "5min", 900: "15min", 1800: "30min", 3600: "1h", 7200: "2h", 14400: "4h",
 }
+MAX_OUTPUTSIZE = 5000
+# Newest closed candle older than this (in timeframes, floor 10 min) means
+# the market is most likely closed (weekend/holiday) rather than live.
+STALE_AFTER_TIMEFRAMES = 3
+STALE_FLOOR_SECONDS = 600
+
+
+def closed_only(candles: List[Candle], timeframe_seconds: int, now: datetime) -> List[Candle]:
+    period = timedelta(seconds=timeframe_seconds)
+    return [c for c in candles if c.timestamp + period <= now]
+
+
+def aggregate_clock_aligned(one_minute: List[Candle], bucket_seconds: int) -> List[Candle]:
+    """Group 1-minute candles into buckets aligned to the clock — 2m
+    candles start on even minutes, 3m candles on :00/:03/:06... — the same
+    boundaries a broker chart uses. A bucket missing any of its minutes is
+    dropped, never padded, so every output candle is built entirely from
+    real fetched data."""
+    factor = bucket_seconds // 60
+    buckets: Dict[int, List[Candle]] = {}
+    for c in one_minute:
+        epoch = int(c.timestamp.timestamp())
+        buckets.setdefault(epoch - epoch % bucket_seconds, []).append(c)
+
+    out: List[Candle] = []
+    for start in sorted(buckets):
+        group = sorted(buckets[start], key=lambda c: c.timestamp)
+        if len(group) != factor:
+            continue
+        out.append(Candle(
+            timestamp=datetime.fromtimestamp(start, tz=timezone.utc),
+            open=group[0].open,
+            high=max(c.high for c in group),
+            low=min(c.low for c in group),
+            close=group[-1].close,
+            volume=sum(c.volume for c in group),
+        ))
+    return out
 
 
 def _to_td_symbol(instrument: str) -> str:
@@ -58,17 +99,24 @@ def _to_td_symbol(instrument: str) -> str:
 
 class TwelveDataProvider(MarketDataProvider):
     name = "twelvedata"
+    probe_symbol = "EUR/USD"
     DEFAULT_BASE_URL = DEFAULT_BASE_URL
 
-    def __init__(self, api_key: str, base_url: Optional[str] = None, timeout_seconds: float = 15.0) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        base_url: Optional[str] = None,
+        timeout_seconds: float = 15.0,
+        clock: Optional[Callable[[], datetime]] = None,
+    ) -> None:
         if not api_key:
             raise ValueError("TwelveDataProvider requires an api_key (MARKET_DATA_API_KEY).")
         self.api_key = api_key
         self.base_url = (base_url or DEFAULT_BASE_URL).rstrip("/")
         self.timeout_seconds = timeout_seconds
+        self._clock = clock or (lambda: datetime.now(timezone.utc))
         self._last_status = DataStatus(
-            provider=self.name, status=ConnectionStatus.DISCONNECTED,
-            message="No request made yet.",
+            provider=self.name, status=ConnectionStatus.DISCONNECTED, message=NO_REQUEST_YET,
         )
 
     def _record_success(self) -> None:
@@ -108,7 +156,7 @@ class TwelveDataProvider(MarketDataProvider):
             if error_code == 429:
                 self._record_failure(ConnectionStatus.RATE_LIMIT, message)
                 raise ProviderRateLimitError(f"Twelve Data rate limit hit: {message}")
-            if error_code == 400:
+            if error_code in (400, 404):
                 self._record_failure(ConnectionStatus.UNSUPPORTED_INSTRUMENT, message)
                 raise ProviderUnsupportedInstrumentError(f"Twelve Data rejected the request: {message}")
             self._record_failure(ConnectionStatus.DISCONNECTED, message)
@@ -144,18 +192,39 @@ class TwelveDataProvider(MarketDataProvider):
             )
 
         if timeframe_seconds in NATIVE_INTERVALS:
-            return self._fetch_native(symbol, NATIVE_INTERVALS[timeframe_seconds], limit)
+            fetched = self._fetch_native(symbol, NATIVE_INTERVALS[timeframe_seconds], limit + 1)
+            candles = closed_only(fetched, timeframe_seconds, self._clock())[-limit:]
+        else:
+            if timeframe_seconds % 60 != 0:
+                raise ValueError(f"Unsupported timeframe: {timeframe_seconds}s is not a multiple of 60s.")
+            factor = timeframe_seconds // 60
+            # +2 buckets: one may be cut off at the oldest end, one is still forming.
+            one_minute = self._fetch_native(symbol, "1min", (limit + 2) * factor)
+            closed_minutes = closed_only(one_minute, 60, self._clock())
+            candles = aggregate_clock_aligned(closed_minutes, timeframe_seconds)[-limit:]
 
-        if timeframe_seconds % 60 != 0:
-            raise ValueError(f"Unsupported timeframe: {timeframe_seconds}s is not a multiple of 60s.")
-        factor = timeframe_seconds // 60
-        one_minute = self._fetch_native(symbol, "1min", limit * factor + factor)
-        return resample(one_minute, factor)[-limit:]
+        self._flag_if_stale(candles, timeframe_seconds)
+        return candles
+
+    def _flag_if_stale(self, candles: List[Candle], timeframe_seconds: int) -> None:
+        if not candles:
+            return
+        closed_at = candles[-1].timestamp + timedelta(seconds=timeframe_seconds)
+        age = (self._clock() - closed_at).total_seconds()
+        if age > max(STALE_AFTER_TIMEFRAMES * timeframe_seconds, STALE_FLOOR_SECONDS):
+            self._last_status = DataStatus(
+                provider=self.name, status=ConnectionStatus.STALE_DATA,
+                message=(
+                    f"Connected, but the newest closed candle ended {closed_at:%Y-%m-%d %H:%M} UTC "
+                    f"({int(age // 60)} min ago) — the market is probably closed (weekend/holiday)."
+                ),
+                last_successful_update=self._last_status.last_successful_update,
+            )
 
     def _fetch_native(self, symbol: str, interval: str, limit: int) -> List[Candle]:
         with httpx.Client(timeout=self.timeout_seconds) as client:
             data = self._request(client, TIME_SERIES_ENDPOINT, {
-                "symbol": symbol, "interval": interval, "outputsize": min(limit, 5000),
+                "symbol": symbol, "interval": interval, "outputsize": min(limit, MAX_OUTPUTSIZE),
                 "timezone": "UTC",
             })
 

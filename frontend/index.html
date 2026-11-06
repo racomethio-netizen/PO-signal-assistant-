@@ -16,10 +16,11 @@
   <div class="topbar">
     <h1>Pocket Option Signal Assistant</h1>
     <div style="display:flex; gap:8px; align-items:center;">
-      <div id="conn-pill" class="conn-pill conn-DISCONNECTED" title="No market-data provider configured.">Market data: DISCONNECTED</div>
+      <div id="conn-pill" class="conn-pill conn-DISCONNECTED" onclick="App.loadConnectionStatus(true)">Market data: DISCONNECTED</div>
       <div id="risk-pill" class="risk-pill risk-ACTIVE">ACTIVE</div>
     </div>
   </div>
+  <div id="conn-detail" class="disclaimer" style="margin:-8px 0 12px 0;"></div>
 
   <!-- 1. MARKET -->
   <div class="panel wide">
@@ -27,7 +28,7 @@
     <div class="row">
       <div class="field">
         <label>Currency pair / asset</label>
-        <input id="asset" value="EURUSD" list="instrument-datalist" oninput="App.onAssetInput()" />
+        <input id="asset" value="EURUSD" list="instrument-datalist" oninput="App.onAssetInput()" onchange="App.refreshAll()" />
         <datalist id="instrument-datalist"></datalist>
       </div>
       <div class="field">
@@ -44,10 +45,15 @@
       </div>
       <div class="field">
         <label>&nbsp;</label>
+        <label class="toggle"><input type="checkbox" id="auto-update" onchange="App.setAutoUpdate(this.checked)" /> Auto-update</label>
+      </div>
+      <div class="field">
+        <label>&nbsp;</label>
         <button class="secondary" onclick="App.generateSignal(true)">Generate signal (with AI explanation)</button>
       </div>
       <div class="field" id="data-status" style="margin-left:auto; color: var(--text-dim); font-size:12px;"></div>
     </div>
+    <div id="live-status" class="disclaimer" style="margin:0 0 10px 0;"></div>
 
     <div class="row">
       <div class="field">

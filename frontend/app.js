@@ -1,7 +1,26 @@
 const API = "";
 
+const TIMEFRAMES = { "2m": 120, "3m": 180, "15m": 900 };
+const LIVE_CANDLE_LIMIT = 200;
+// Give the data vendor a few seconds to publish a just-closed candle.
+const PUBLISH_GRACE_MS = 10000;
+const AUTO_UPDATE_MS = 20000;
+const ERROR_BACKOFF_MS = 60000;
+// Newest candle this old means the market is closed (weekend/holiday):
+// re-checking every tick would only burn API credits on unchanged data.
+const MARKET_CLOSED_AFTER_MS = 10 * 60 * 1000;
+const MARKET_CLOSED_BACKOFF_MS = 10 * 60 * 1000;
+
 function el(id) { return document.getElementById(id); }
 function safeClass(s) { return (s || "").replace(/\s+/g, "_"); }
+
+function errorText(data, resp) {
+  const d = data.detail;
+  if (typeof d === "string") return d;
+  if (d && d.message) return [d.message, ...(d.errors || [])].join(" ");
+  if (d) return JSON.stringify(d);
+  return resp.statusText || `HTTP ${resp.status}`;
+}
 
 async function apiPost(path, body) {
   const resp = await fetch(API + path, {
@@ -10,14 +29,14 @@ async function apiPost(path, body) {
     body: JSON.stringify(body || {}),
   });
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.detail ? JSON.stringify(data.detail) : resp.statusText);
+  if (!resp.ok) throw new Error(errorText(data, resp));
   return data;
 }
 
 async function apiGet(path) {
   const resp = await fetch(API + path);
   const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error(data.detail ? JSON.stringify(data.detail) : resp.statusText);
+  if (!resp.ok) throw new Error(errorText(data, resp));
   return data;
 }
 
@@ -55,7 +74,8 @@ function maybeBrowserNotify(signal, alertDecision) {
 }
 
 const App = {
-  async refreshAll() {
+  async refreshAll({ fetchLive = true } = {}) {
+    if (fetchLive) await this.fetchLiveData();
     await this.loadInstrumentList();
     await this.loadInstrumentInfo();
     await this.loadDataStatus();
@@ -78,20 +98,114 @@ const App = {
     } catch (e) { el("data-status").textContent = ""; }
   },
 
-  async loadConnectionStatus() {
+  async loadConnectionStatus(probe = false) {
     const pill = el("conn-pill");
     try {
-      const d = await apiGet("/api/market-data/status");
-      const cls = safeClass(d.status);
-      pill.className = "conn-pill conn-" + cls;
+      const d = await apiGet("/api/market-data/status" + (probe ? "?probe=true" : ""));
+      pill.className = "conn-pill conn-" + safeClass(d.status);
       pill.textContent = `Market data: ${d.status}${d.provider ? " (" + d.provider + ")" : ""}`;
-      const lastUpdate = d.last_successful_update ? new Date(d.last_successful_update).toLocaleString() : "never";
-      pill.title = `${d.message || ""} · last successful update: ${lastUpdate}`;
+      const last = d.last_successful_update ? new Date(d.last_successful_update).toLocaleString() : "never";
+      el("conn-detail").textContent = d.configured
+        ? `${d.message} · last successful update: ${last} · tap the status to re-test`
+        : "No live data provider is configured on the server — set MARKET_DATA_PROVIDER (see .env.example).";
     } catch (e) {
       pill.className = "conn-pill conn-DISCONNECTED";
       pill.textContent = "Market data: DISCONNECTED";
-      pill.title = "Could not reach the market-data status endpoint.";
+      el("conn-detail").textContent = "Could not reach the market-data status endpoint: " + e.message;
     }
+  },
+
+  // Which fetch endpoint can supply live candles for this instrument, if any.
+  liveSourceFor(info, conn) {
+    if (info && info.instrument_type === "OTC") return null;
+    const category = info ? info.category : null;
+    if (category === "CRYPTO") {
+      return conn.provider === "binance" ? "/api/data/fetch/provider" : "/api/data/fetch/binance";
+    }
+    if (!conn.provider) return null;
+    if (category === "FOREX" && conn.provider !== "twelvedata") return null;
+    return "/api/data/fetch/provider";
+  },
+
+  noLiveSourceMessage(info, conn) {
+    if (info && info.instrument_type === "OTC") {
+      return "OTC pairs have no live data feed (no data vendor sells Pocket Option's OTC prices) — upload OTC candles yourself (CSV/JSON) to analyse them.";
+    }
+    if (!conn.provider) {
+      return "No live data provider is configured on the server — set MARKET_DATA_PROVIDER (see .env.example) or upload candles manually.";
+    }
+    return `The configured provider (${conn.provider}) doesn't supply this instrument — upload candles manually.`;
+  },
+
+  // Fetch fresh closed candles for every dashboard timeframe whose next
+  // candle has closed since the last fetch. Returns true if anything new
+  // was loaded. Timeframes that are still current cost no API credits.
+  async fetchLiveData() {
+    const { asset } = currentAssetTf();
+    if (!asset || this._fetching) return false;
+    this._fetching = true;
+    try {
+      const conn = await apiGet("/api/market-data/status").catch(() => ({}));
+      const info = await apiGet(`/api/instruments/${encodeURIComponent(asset)}`).catch(() => null);
+      const path = this.liveSourceFor(info, conn);
+      if (!path) {
+        el("live-status").textContent = this.noLiveSourceMessage(info, conn);
+        return false;
+      }
+      const source = path.endsWith("/binance") ? "Binance" : conn.provider;
+      let fetched = false;
+      let newestClose = 0;
+      const uploaded = [];
+      for (const [tf, seconds] of Object.entries(TIMEFRAMES)) {
+        const s = await apiGet(`/api/data/status?asset=${encodeURIComponent(asset)}&timeframe=${tf}`).catch(() => ({}));
+        if (s.source === "upload") { uploaded.push(tf); continue; }  // never overwrite the user's own data
+        let last = s.last_timestamp ? new Date(s.last_timestamp).getTime() : 0;
+        if (!last || Date.now() >= last + 2 * seconds * 1000 + PUBLISH_GRACE_MS) {
+          try {
+            const data = await apiPost(path, { asset, timeframe: tf, limit: LIVE_CANDLE_LIMIT, keep_uploads: true });
+            if (data.kept_upload) { uploaded.push(tf); continue; }
+            last = new Date(data.last_timestamp).getTime();
+            fetched = true;
+          } catch (e) {
+            el("live-status").textContent = `Live data error (${source}, ${asset} ${tf}): ${e.message}`;
+            this._retryAfter = Date.now() + ERROR_BACKOFF_MS;
+            await this.loadConnectionStatus();
+            return fetched;
+          }
+        }
+        newestClose = Math.max(newestClose, last + seconds * 1000);
+      }
+      const checked = new Date().toLocaleTimeString();
+      const live = Object.keys(TIMEFRAMES).filter((tf) => !uploaded.includes(tf));
+      const keptNote = uploaded.length
+        ? ` Your uploaded ${uploaded.join(" · ")} candles are kept (never replaced by live data).` : "";
+      if (!live.length) {
+        el("live-status").textContent = `Using your uploaded ${asset} candles.${keptNote}`;
+      } else if (Date.now() - newestClose > MARKET_CLOSED_AFTER_MS) {
+        this._retryAfter = Date.now() + MARKET_CLOSED_BACKOFF_MS;
+        el("live-status").textContent =
+          `Market appears closed — newest ${asset} candle ended ${new Date(newestClose).toLocaleString()}. ` +
+          `Signals below use that last real data. Re-checking every 10 minutes (checked ${checked}).${keptNote}`;
+      } else {
+        el("live-status").textContent =
+          `Live data: ${asset} ${live.join(" · ")} from ${source} — up to date (checked ${checked}).${keptNote}`;
+      }
+      return fetched;
+    } finally {
+      this._fetching = false;
+    }
+  },
+
+  async autoTick() {
+    if (this._retryAfter && Date.now() < this._retryAfter) return;
+    this._retryAfter = 0;
+    if (await this.fetchLiveData()) await this.refreshAll({ fetchLive: false });
+  },
+
+  setAutoUpdate(on) {
+    try { localStorage.setItem("po.autoUpdate", on ? "1" : "0"); } catch (e) { /* storage unavailable */ }
+    clearInterval(this._autoTimer);
+    this._autoTimer = on ? setInterval(() => this.autoTick(), AUTO_UPDATE_MS) : null;
   },
 
   async fetchFromProvider() {
@@ -101,7 +215,7 @@ const App = {
     try {
       const data = await apiPost("/api/data/fetch/provider", { asset, timeframe, limit });
       alert(`Fetched ${data.candle_count} real candles from the configured provider for ${asset} ${timeframe}.`);
-      await this.refreshAll();
+      await this.refreshAll({ fetchLive: false });
     } catch (e) {
       alert("Provider fetch failed: " + e.message);
       await this.loadConnectionStatus();
@@ -452,4 +566,10 @@ function fmt(v) {
   return v;
 }
 
-document.addEventListener("DOMContentLoaded", () => App.refreshAll());
+document.addEventListener("DOMContentLoaded", () => {
+  let auto = true;
+  try { auto = localStorage.getItem("po.autoUpdate") !== "0"; } catch (e) { /* storage unavailable */ }
+  el("auto-update").checked = auto;
+  App.setAutoUpdate(auto);
+  App.refreshAll();
+});

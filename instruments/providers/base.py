@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional
 
 from data.models import Candle
 
+NO_REQUEST_YET = "No request made yet."
+
 
 class ConnectionStatus(str, Enum):
     CONNECTED = "CONNECTED"
@@ -76,6 +78,17 @@ class ProviderNetworkError(ProviderError):
 
 class MarketDataProvider(ABC):
     name: str = "unknown"
+    probe_symbol: str = ""  # a liquid instrument used only to test the connection
+
+    def test_connection(self) -> DataStatus:
+        """One cheap real request (a latest-price lookup) to learn whether
+        the provider is reachable and the credentials work. The outcome is
+        recorded in, and returned as, the provider's status — never raised."""
+        try:
+            self.get_latest_price(self.probe_symbol)
+        except ProviderError:
+            pass
+        return self.get_data_status()
 
     @abstractmethod
     def get_available_instruments(self) -> List[ProviderInstrument]:
