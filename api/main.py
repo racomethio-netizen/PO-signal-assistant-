@@ -35,6 +35,7 @@ from instruments import (
     check_provider_fetch_allowed,
     crypto_instrument,
     guess_instrument,
+    looks_like_crypto,
     otc_data_unavailable_reason,
 )
 from instruments.providers import (
@@ -296,20 +297,24 @@ def fetch_from_provider(
 
     if provider.name == "twelvedata":
         # A successful Twelve Data fetch IS verification of a real,
-        # standard-market forex pair. If it was already registered (e.g.
-        # one of the default catalog's majors/crosses), upgrade its
-        # data_source to reflect the now-verified live source rather than
-        # leaving it marked 'manual'; otherwise register it fresh.
+        # standard-market forex or crypto pair. If it was already
+        # registered (e.g. one of the default catalog's majors/crosses or
+        # crypto pairs), upgrade its data_source to reflect the now-
+        # verified live source; otherwise register it fresh, as crypto or
+        # forex depending on what the symbol looks like.
         if existing is not None:
             state.asset_registry.register(replace(existing, data_source=DataSource.TWELVEDATA))
         else:
-            symbol = body.asset.upper()
-            base, quote = (symbol[:3], symbol[3:6]) if len(symbol) >= 6 else (symbol, "")
-            state.asset_registry.register(Instrument(
-                symbol=symbol, display_name=f"{base}/{quote}" if quote else symbol,
-                base_currency=base, quote_currency=quote, category=InstrumentCategory.FOREX,
-                instrument_type=InstrumentType.STANDARD, data_source=DataSource.TWELVEDATA,
-            ))
+            symbol = body.asset.upper().replace("/", "")
+            if looks_like_crypto(symbol):
+                state.asset_registry.register(replace(crypto_instrument(symbol), data_source=DataSource.TWELVEDATA))
+            else:
+                base, quote = (symbol[:3], symbol[3:6]) if len(symbol) >= 6 else (symbol, "")
+                state.asset_registry.register(Instrument(
+                    symbol=symbol, display_name=f"{base}/{quote}" if quote else symbol,
+                    base_currency=base, quote_currency=quote, category=InstrumentCategory.FOREX,
+                    instrument_type=InstrumentType.STANDARD, data_source=DataSource.TWELVEDATA,
+                ))
     return _validate_and_store(state, body.asset, body.timeframe, candles, source=provider.name, keep_uploads=body.keep_uploads)
 
 

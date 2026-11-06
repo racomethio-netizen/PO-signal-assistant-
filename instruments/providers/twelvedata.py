@@ -1,5 +1,5 @@
-"""Twelve Data as a MarketDataProvider — the forex-capable reference
-implementation for STEP 2/3 of the market-data adapter upgrade.
+"""Twelve Data as a MarketDataProvider — the forex- and crypto-capable
+reference implementation for STEP 2/3 of the market-data adapter upgrade.
 
 Public API, documented at https://twelvedata.com/docs. Read-only: an API
 key authenticates requests to Twelve Data, never to Pocket Option or any
@@ -88,12 +88,21 @@ def aggregate_clock_aligned(one_minute: List[Candle], bucket_seconds: int) -> Li
 
 
 def _to_td_symbol(instrument: str) -> str:
-    """'EURUSD' -> 'EUR/USD'; already-slashed input passes through."""
+    """Twelve Data's slash format: 'EURUSD' -> 'EUR/USD', 'BTCUSD' ->
+    'BTC/USD'. Twelve Data quotes crypto in USD, so a USDT-quoted symbol
+    maps to its USD pair ('BTCUSDT' -> 'BTC/USD'; USDT tracks USD closely,
+    and Pocket Option's own crypto instruments are USD-quoted).
+    Already-slashed input passes through untouched."""
     s = instrument.upper().replace("_OTC", "")
     if "/" in s:
         return s
+    s = s.replace("-", "").replace("_", "")
     if len(s) == 6:
         return f"{s[:3]}/{s[3:]}"
+    if s.endswith("USDT") and len(s) > 4:
+        return f"{s[:-4]}/USD"
+    if s.endswith("USD") and len(s) > 3:
+        return f"{s[:-3]}/USD"
     return s
 
 

@@ -58,8 +58,8 @@ def check_binance_fetch_allowed(instrument: Instrument) -> InstrumentCheck:
 
 
 _PROVIDER_CATEGORIES = {
-    "binance": InstrumentCategory.CRYPTO,
-    "twelvedata": InstrumentCategory.FOREX,
+    "binance": frozenset({InstrumentCategory.CRYPTO}),
+    "twelvedata": frozenset({InstrumentCategory.FOREX, InstrumentCategory.CRYPTO}),
 }
 
 
@@ -77,13 +77,14 @@ def check_provider_fetch_allowed(instrument: Instrument, provider_name: str) -> 
                 "market data is never substituted for it."
             ),
         )
-    expected_category = _PROVIDER_CATEGORIES.get(provider_name)
-    if expected_category is not None and instrument.category != expected_category:
+    supported = _PROVIDER_CATEGORIES.get(provider_name)
+    if supported is not None and instrument.category not in supported:
         return InstrumentCheck(
             ok=False,
             reason=(
                 f"'{instrument.symbol}' is a {instrument.category.value} instrument; "
-                f"the '{provider_name}' provider only supplies {expected_category.value} data."
+                f"the '{provider_name}' provider only supplies "
+                f"{' and '.join(sorted(c.value for c in supported))} data."
             ),
         )
     return InstrumentCheck(ok=True)

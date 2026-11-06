@@ -120,7 +120,9 @@ const App = {
     if (info && info.instrument_type === "OTC") return null;
     const category = info ? info.category : null;
     if (category === "CRYPTO") {
-      return conn.provider === "binance" ? "/api/data/fetch/provider" : "/api/data/fetch/binance";
+      // A configured provider (Twelve Data or Binance) is preferred: Binance's
+      // own endpoint refuses requests from US servers such as Render's.
+      return conn.provider ? "/api/data/fetch/provider" : "/api/data/fetch/binance";
     }
     if (!conn.provider) return null;
     if (category === "FOREX" && conn.provider !== "twelvedata") return null;
@@ -153,6 +155,8 @@ const App = {
         return false;
       }
       const source = path.endsWith("/binance") ? "Binance" : conn.provider;
+      const usdNote = source === "twelvedata" && info && info.category === "CRYPTO" && info.quote_currency === "USDT"
+        ? " Twelve Data prices crypto in USD, so this uses its BTC/USD-style feed." : "";
       let fetched = false;
       let newestClose = 0;
       const uploaded = [];
@@ -177,8 +181,8 @@ const App = {
       }
       const checked = new Date().toLocaleTimeString();
       const live = Object.keys(TIMEFRAMES).filter((tf) => !uploaded.includes(tf));
-      const keptNote = uploaded.length
-        ? ` Your uploaded ${uploaded.join(" · ")} candles are kept (never replaced by live data).` : "";
+      const keptNote = (uploaded.length
+        ? ` Your uploaded ${uploaded.join(" · ")} candles are kept (never replaced by live data).` : "") + usdNote;
       if (!live.length) {
         el("live-status").textContent = `Using your uploaded ${asset} candles.${keptNote}`;
       } else if (Date.now() - newestClose > MARKET_CLOSED_AFTER_MS) {

@@ -12,7 +12,19 @@ from fastapi.testclient import TestClient
 
 import api.state as state_module
 from api.main import app
+from dataclasses import replace
+
+from instruments import (
+    DataSource,
+    Instrument,
+    InstrumentCategory,
+    InstrumentType,
+    check_provider_fetch_allowed,
+    crypto_instrument,
+    looks_like_crypto,
+)
 from instruments.providers import ConnectionStatus, ProviderUnsupportedInstrumentError, TwelveDataProvider
+from instruments.providers.twelvedata import _to_td_symbol
 from tests.conftest import deterministic_series
 
 
@@ -87,6 +99,50 @@ def minute_rows(minutes, day=utc(2026, 11, 6, 10, 0)):
 
 def provider_at(now):
     return TwelveDataProvider(api_key="k", clock=lambda: now)
+
+
+# --- Crypto through Twelve Data ------------------------------------------
+@pytest.mark.parametrize("given,expected", [
+    ("EURUSD", "EUR/USD"), ("eurusd", "EUR/USD"), ("EUR/USD", "EUR/USD"),
+    ("BTCUSDT", "BTC/USD"), ("ETHUSDT", "ETH/USD"), ("btc-usdt", "BTC/USD"),
+    ("BTCUSD", "BTC/USD"), ("DOGEUSD", "DOGE/USD"), ("BTC/USD", "BTC/USD"),
+])
+def test_symbols_map_to_twelve_data_format(given, expected):
+    assert _to_td_symbol(given) == expected
+
+
+def test_crypto_candles_come_back_closed_ascending_and_without_a_forming_candle(monkeypatch):
+    # Crypto rows have no weekend gap and may carry a volume field.
+    now = utc(2026, 11, 7, 14, 7, 30)  # a Saturday — crypto trades 24/7
+    rows = realistic_rows(utc(2026, 11, 7, 14, 0), 60, step_seconds=300, base=95000.0)
+    for r in rows:
+        r["volume"] = "12.5"
+    fake = _patch_client(monkeypatch, [FakeResponse({"status": "ok", "values": rows})])
+    provider = TwelveDataProvider(api_key="k", clock=lambda: now)
+    candles = provider.get_candles("BTCUSDT", 300, 20)
+    assert fake.calls[0][1]["symbol"] == "BTC/USD"
+    assert len(candles) == 20
+    assert candles[-1].timestamp == utc(2026, 11, 7, 14, 0)  # the 14:05 candle is still forming
+    assert candles[0].timestamp < candles[-1].timestamp
+    assert provider.get_data_status().status == ConnectionStatus.CONNECTED  # open market: not stale
+
+
+def test_provider_rules_for_crypto_and_otc():
+    crypto = crypto_instrument("BTCUSDT")
+    assert check_provider_fetch_allowed(crypto, "twelvedata").ok
+    assert check_provider_fetch_allowed(crypto, "binance").ok
+    forex = Instrument("EURUSD", "EUR/USD", "EUR", "USD", InstrumentCategory.FOREX, InstrumentType.STANDARD, DataSource.MANUAL)
+    assert check_provider_fetch_allowed(forex, "twelvedata").ok
+    assert not check_provider_fetch_allowed(forex, "binance").ok
+    otc = replace(forex, symbol="EURUSD_OTC", instrument_type=InstrumentType.OTC)
+    assert not check_provider_fetch_allowed(otc, "twelvedata").ok
+    other = replace(forex, category=InstrumentCategory.OTHER)
+    assert not check_provider_fetch_allowed(other, "twelvedata").ok
+
+
+def test_looks_like_crypto():
+    assert all(looks_like_crypto(s) for s in ["BTCUSDT", "ETHUSD", "DOGE/USD", "sol-usdt", "XRPUSD"])
+    assert not any(looks_like_crypto(s) for s in ["EURUSD", "GBPJPY", "AUDNZD", "USDJPY", "EURSEK"])
 
 
 # --- Closed candles only -----------------------------------------------
@@ -270,3 +326,44 @@ def test_status_reports_bad_key_immediately(client, monkeypatch):
     _patch_client(monkeypatch, [FakeResponse({"code": 401, "message": "**apikey** parameter is incorrect", "status": "error"})])
     body = client.get("/api/market-data/status").json()
     assert body["status"] == "AUTHENTICATION ERROR"
+
+
+# --- API: crypto and unregistered symbols through the provider endpoint ---
+def _fetch_via_twelvedata(client, monkeypatch, asset, timeframe="15m", base=1.0850):
+    current_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    rows = realistic_rows(current_minute, 300, step_seconds=900, base=base)
+    _patch_client(monkeypatch, [FakeResponse({"status": "ok", "values": rows})])
+    resp = client.post("/api/data/fetch/provider", json={"asset": asset, "timeframe": timeframe, "limit": 200})
+    assert resp.status_code == 200, resp.text
+    return client.get(f"/api/instruments/{asset}").json()
+
+
+def test_default_crypto_pair_fetches_through_twelvedata_and_is_marked_so(client, monkeypatch):
+    info = _fetch_via_twelvedata(client, monkeypatch, "BTCUSDT", base=95000.0)
+    assert info["category"] == "CRYPTO"
+    assert info["data_source"] == "twelvedata"
+    status = client.get("/api/data/status", params={"asset": "BTCUSDT", "timeframe": "15m"}).json()
+    assert status["source"] == "twelvedata"
+
+
+def test_unregistered_crypto_symbol_registers_as_crypto_not_forex(client, monkeypatch):
+    info = _fetch_via_twelvedata(client, monkeypatch, "DOGEUSD", base=0.18)
+    assert info["category"] == "CRYPTO"
+    assert info["base_currency"] == "DOGE" and info["quote_currency"] == "USD"
+    assert info["data_source"] == "twelvedata"
+
+
+def test_unregistered_forex_symbol_still_registers_as_forex(client, monkeypatch):
+    info = _fetch_via_twelvedata(client, monkeypatch, "EURSEK", base=11.2)
+    assert info["category"] == "FOREX"
+    assert info["data_source"] == "twelvedata"
+
+
+def test_otc_crypto_is_still_rejected(client):
+    client.post("/api/instruments/register", json={
+        "symbol": "BTCUSD_OTC", "display_name": "BTC/USD (OTC)", "base_currency": "BTC", "quote_currency": "USD",
+        "category": "CRYPTO", "instrument_type": "OTC", "data_source": "manual",
+    })
+    resp = client.post("/api/data/fetch/provider", json={"asset": "BTCUSD_OTC", "timeframe": "15m", "limit": 50})
+    assert resp.status_code == 400
+    assert "OTC" in resp.json()["detail"]

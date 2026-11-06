@@ -92,6 +92,16 @@ def crypto_instrument(symbol: str) -> Instrument:
     )
 
 
+_CRYPTO_BASES = ("BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "LTC", "DOT", "AVAX", "LINK", "TRX", "MATIC")
+
+
+def looks_like_crypto(symbol: str) -> bool:
+    """Used only to pick a category for a symbol that isn't in the catalog
+    yet; a symbol that IS registered always keeps its registered category."""
+    s = symbol.upper().replace("/", "").replace("-", "").replace("_", "")
+    return s.endswith("USDT") or s.startswith(_CRYPTO_BASES)
+
+
 def _default_catalog() -> Dict[str, Instrument]:
     catalog: Dict[str, Instrument] = {}
     for symbol in _FOREX_MAJORS + _FOREX_CROSSES:

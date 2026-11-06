@@ -1,5 +1,5 @@
 from .models import AvailabilityStatus, DataSource, Instrument, InstrumentCategory, InstrumentType
-from .registry import AssetRegistry, crypto_instrument, guess_instrument
+from .registry import AssetRegistry, crypto_instrument, guess_instrument, looks_like_crypto
 from .validation import (
     InstrumentCheck,
     check_binance_fetch_allowed,
@@ -17,6 +17,7 @@ __all__ = [
     "AssetRegistry",
     "guess_instrument",
     "crypto_instrument",
+    "looks_like_crypto",
     "InstrumentCheck",
     "check_binance_fetch_allowed",
     "check_instrument_known",

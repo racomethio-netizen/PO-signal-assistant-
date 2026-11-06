@@ -115,11 +115,12 @@ Key guarantees:
 **Honesty note:** there is still no *direct* connection to Pocket Option
 anywhere in this app, and none is planned — see
 [Market data providers](#market-data-providers-generic-and-pluggable) below.
-Crypto pairs have a verified live source (Binance) regardless of
-configuration. Standard-market forex pairs get a verified live source
-(Twelve Data) **only when `MARKET_DATA_PROVIDER` is configured** — until
-then, their `data_source` stays `manual` and you supply candles yourself
-via CSV/JSON/manual entry, same as before. **OTC instruments have no live
+Standard-market forex and crypto pairs get a verified live source
+(Twelve Data) **when `MARKET_DATA_PROVIDER` is configured** — until
+then, forex `data_source` stays `manual` (you supply candles yourself via
+CSV/JSON/manual entry, same as before) and crypto falls back to the
+Binance endpoint, which Binance refuses from US-based servers such as
+Render's. **OTC instruments have no live
 source at all, by design** — no configured provider is ever substituted
 for OTC data; you must supply OTC candles yourself. Nothing here claims
 broader Pocket Option instrument coverage than what's actually been
@@ -131,11 +132,11 @@ verified.
   history, and the instrument registry all live in the API process's memory
   and reset on restart. There is no database. Adding persistence is
   straightforward future work that would not change any analysis/risk logic.
-- **Live data covers crypto always, and standard forex optionally.**
-  `data/binance_adapter.py` wires up Binance for crypto pairs unconditionally.
-  `instruments/providers/` adds a generic, pluggable interface that can wire
-  up a second live source (currently Twelve Data) for standard-market forex
-  pairs — but only when you configure `MARKET_DATA_PROVIDER` (see
+- **Live data covers standard forex and crypto, when a provider is configured.**
+  `data/binance_adapter.py` wires up Binance for crypto (blocked from US
+  servers). `instruments/providers/` adds a generic, pluggable interface;
+  its Twelve Data provider serves both standard-market forex and crypto
+  once you configure `MARKET_DATA_PROVIDER` (see
   [Market data providers](#market-data-providers-generic-and-pluggable)).
   OTC pairs, stocks, and commodities still require CSV/JSON/manual entry.
 - **No spread/price-quality feed.** OHLCV has no standard "spread" field, so
@@ -227,7 +228,7 @@ via the API:
    ```
    A network or upstream failure returns a clean `502` with the reason —
    it never falls back to fabricated data.
-5. **Fetch live from a configured market-data provider (standard forex pairs)**
+5. **Fetch live from a configured market-data provider (standard forex and crypto pairs)**
    — only available once `MARKET_DATA_PROVIDER` is set (see
    [Market data providers](#market-data-providers-generic-and-pluggable)).
    ```bash
@@ -242,8 +243,9 @@ via the API:
    **On the dashboard this is automatic.** Opening the page, pressing
    **Refresh**, or picking a pair/timeframe fetches live candles for all
    three timeframes (2m/3m/15m) from the right source — the configured
-   provider for forex, Binance for crypto, nothing for OTC (with a message
-   saying so). With **Auto-update** on (the default), the dashboard checks
+   provider for forex and crypto (Binance's own endpoint for crypto only
+   if no provider is configured), nothing for OTC (with a message saying
+   so). With **Auto-update** on (the default), the dashboard checks
    every 20 seconds but only calls the data API for a timeframe once its
    next candle has actually closed, then regenerates the signal — about
    54 API calls per hour for one pair, so Twelve Data's free tier (8 per
@@ -308,7 +310,14 @@ Two implementations ship today:
 - `instruments/providers/binance_provider.py` — wraps the existing,
   unchanged `BinanceAdapter` for crypto pairs.
 - `instruments/providers/twelvedata.py` — calls Twelve Data's public REST
-  API for standard-market forex pairs. Details that matter for live use:
+  API for standard-market forex and crypto pairs. Details that matter for
+  live use:
+  - Twelve Data quotes crypto in **USD**, not USDT, so a USDT symbol maps
+    to its USD pair (`BTCUSDT` → `BTC/USD`, `ETHUSDT` → `ETH/USD`). USDT
+    tracks the dollar closely, and Pocket Option's own crypto instruments
+    are USD-quoted, but the prices are not Binance's USDT order book. If
+    Twelve Data doesn't carry a symbol, the status shows
+    `UNSUPPORTED INSTRUMENT` with its message — nothing is substituted.
   - Twelve Data's newest row is always the **still-forming** current
     candle; it is dropped, so the signal engine only ever sees closed
     candles (otherwise every live signal would be refused as
@@ -330,9 +339,11 @@ unrecognized provider name.
 
 `check_provider_fetch_allowed()` runs **before any network call**: an OTC
 symbol (`EURUSD_OTC`) is always rejected for every provider — no live
-source is ever substituted for OTC data — and a crypto symbol is rejected
-for Twelve Data (and vice versa for Binance), so a provider can never be
-asked to return data for an instrument it doesn't actually serve.
+source is ever substituted for OTC data — and an instrument whose
+category a provider doesn't supply is rejected (a forex symbol for
+Binance; anything other than forex or crypto for Twelve Data), so a
+provider can never be asked to return data for an instrument it doesn't
+actually serve.
 
 ### Connection status
 

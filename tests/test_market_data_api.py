@@ -58,11 +58,18 @@ def test_fetch_provider_rejects_otc_before_network_call(client, monkeypatch):
     mock_fetch.assert_not_called()
 
 
-def test_fetch_provider_rejects_crypto_symbol_via_twelvedata(client, monkeypatch):
+def test_fetch_provider_rejects_instrument_category_twelvedata_does_not_supply(client, monkeypatch):
     monkeypatch.setenv("MARKET_DATA_PROVIDER", "twelvedata")
     monkeypatch.setenv("MARKET_DATA_API_KEY", "fake-key")
-    resp = client.post("/api/data/fetch/provider", json={"asset": "BTCUSDT", "timeframe": "3m", "limit": 50})
+    client.post("/api/instruments/register", json={
+        "symbol": "XAUUSD", "display_name": "Gold", "base_currency": "XAU", "quote_currency": "USD",
+        "category": "OTHER", "instrument_type": "STANDARD", "data_source": "manual",
+    })
+    with patch("instruments.providers.twelvedata.TwelveDataProvider.get_candles") as mock_fetch:
+        resp = client.post("/api/data/fetch/provider", json={"asset": "XAUUSD", "timeframe": "3m", "limit": 50})
     assert resp.status_code == 400
+    assert "CRYPTO and FOREX" in resp.json()["detail"]
+    mock_fetch.assert_not_called()
 
 
 def test_fetch_provider_unsupported_instrument_maps_to_400(client, monkeypatch):
